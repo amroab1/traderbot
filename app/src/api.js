@@ -1,6 +1,8 @@
+// app/src/api.js
 import axios from "axios";
 
-const API_BASE = process.env.REACT_APP_API_URL || "https://server-production-dd28.up.railway.app";
+const API_BASE =
+  import.meta.env.VITE_API_URL || "https://server-production-dd28.up.railway.app";
 
 export const getUser = (userId) => axios.get(`${API_BASE}/api/user/${userId}`);
 export const startTrial = (userId) =>
