@@ -1,25 +1,48 @@
+// app/src/screens/Menu.jsx
 import React from "react";
-import { useNavigate } from "react-router-dom";
 
-export default function Menu() {
+const LIMITS = {
+  trial: 5,
+  Starter: 5,
+  Pro: 10,
+  Elite: Infinity,
+};
+
+export default function Menu({ status, onSelectTopic }) {
+  const used = status.requestsWeek;
+  const limit = LIMITS[status.package] ?? 0;
+  const remaining = limit === Infinity ? "unlimited" : Math.max(limit - used, 0);
+
   return (
-    <div>
-      <h2>📋 Services</h2>
-      <button onClick={() => window.location.href = "/chat?topic=trade_setup"}>
-        📉 Trade Setup Review
-      </button>
-      <button onClick={() => window.location.href = "/chat?topic=account_health"}>
-        📊 Account Health Check
-      </button>
-      <button onClick={() => window.location.href = "/chat?topic=psychology"}>
-        🧠 Psychology Support
-      </button>
-      <button onClick={() => window.location.href = "/chat?topic=funded_account"}>
-        🏆 Funded Account Advice
-      </button>
-      <button onClick={() => window.location.href = "/chat?topic=margin_call"}>
-        ⚠️ Margin Call Emergency
-      </button>
+    <div style={{ padding: 20 }}>
+      <h2>Services</h2>
+      <div>
+        <strong>Package:</strong> {status.package}
+      </div>
+      <div>
+        <strong>Requests used:</strong> {used} / {limit === Infinity ? "∞" : limit}
+      </div>
+      <div>
+        <strong>Remaining this week:</strong> {remaining}
+      </div>
+
+      <div style={{ marginTop: 16, display: "grid", gap: 8 }}>
+        <button onClick={() => onSelectTopic("trade_setup")}>
+          📉 Trade Setup Review
+        </button>
+        <button onClick={() => onSelectTopic("account_health")}>
+          📊 Account Health Check
+        </button>
+        <button onClick={() => onSelectTopic("psychology")}>
+          🧠 Psychology Support
+        </button>
+        <button onClick={() => onSelectTopic("funded_account")}>
+          🏆 Funded Account Advice
+        </button>
+        <button onClick={() => onSelectTopic("margin_call")}>
+          ⚠️ Margin Call Emergency
+        </button>
+      </div>
     </div>
   );
 }

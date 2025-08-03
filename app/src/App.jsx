@@ -1,61 +1,162 @@
+// app/src/App.jsx
 import React, { useEffect, useState } from "react";
-import { getUser, startTrial, chat } from "./api.js";
+import { getUser, startTrial } from "./api.js";
+import Menu from "./screens/Menu.jsx";
+import Chat from "./screens/Chat.jsx";
+import Upgrade from "./screens/Upgrade.jsx";
+
+const LIMITS = {
+  trial: 5,
+  Starter: 5,
+  Pro: 10,
+  Elite: Infinity,
+};
 
 export default function App() {
   const [userId, setUserId] = useState(null);
   const [status, setStatus] = useState(null);
-  const [reply, setReply] = useState("");
+  const [topic, setTopic] = useState(null);
+  const [showUpgrade, setShowUpgrade] = useState(false);
+  const [error, setError] = useState(null);
+  const [waitingForTelegram, setWaitingForTelegram] = useState(false);
 
   useEffect(() => {
-    if (typeof window === "undefined") return;
-    const tg = window.Telegram?.WebApp;
-    if (!tg) {
-      console.warn("Not running inside Telegram WebApp");
-      // for local dev you can mock:
-      window.Telegram = {
-        WebApp: {
-          expand: () => {},
-          initDataUnsafe: { user: { id: "12345" } },
-        },
-      };
-    }
-    const user = window.Telegram.WebApp.initDataUnsafe.user;
-    const uid = String(user.id);
-    setUserId(uid);
+    let resolved = false;
 
-    (async () => {
-      const s = await getUser(uid);
-      setStatus(s.data);
-    })();
+    const proceed = async (uid) => {
+      setUserId(uid);
+      try {
+        const res = await getUser(uid);
+        setStatus(res.data);
+      } catch (e) {
+        console.error("Failed to fetch user status:", e);
+        setError("Failed to fetch user status.");
+      }
+    };
+
+    const initialize = () => {
+      const tg = window.Telegram?.WebApp;
+      if (tg) {
+        tg.expand?.();
+        if (tg.initDataUnsafe?.user?.id) {
+          resolved = true;
+          proceed(String(tg.initDataUnsafe.user.id));
+          return;
+        }
+        // Poll for a short time
+        setWaitingForTelegram(true);
+        const interval = setInterval(() => {
+          if (tg.initDataUnsafe?.user?.id) {
+            clearInterval(interval);
+            setWaitingForTelegram(false);
+            resolved = true;
+            proceed(String(tg.initDataUnsafe.user.id));
+          }
+        }, 200);
+        setTimeout(() => {
+          if (!resolved) {
+            clearInterval(interval);
+            setWaitingForTelegram(false);
+            // fallback for local/dev
+            proceed("12345");
+          }
+        }, 2000);
+      } else {
+        // Not inside Telegram, fallback
+        proceed("12345");
+      }
+    };
+
+    initialize();
   }, []);
 
-  const handleChat = async () => {
+  useEffect(() => {
+    if (!status) return;
+    const limit = LIMITS[status.package] ?? 0;
+    if (
+      (status.package === "trial" && status.expired) ||
+      (limit !== Infinity && status.requestsWeek >= limit)
+    ) {
+      setShowUpgrade(true);
+    } else {
+      setShowUpgrade(false);
+    }
+  }, [status]);
+
+  const refreshStatus = async () => {
     if (!userId) return;
-    const res = await chat({
-      userId,
-      topic: "trade_setup",
-      message: "Test trade message",
-      imageDescription: "",
-    });
-    setReply(res.data.reply || res.reply);
+    try {
+      const res = await getUser(userId);
+      setStatus(res.data);
+    } catch (e) {
+      console.error("Refresh status failed", e);
+    }
   };
 
-  if (!status) return <div>Loading...</div>;
-
-  return (
-    <div style={{ padding: 20 }}>
-      <h1>Package: {status.package}</h1>
-      <p>Trial active: {String(status.trialActive)}</p>
-      <button onClick={() => startTrial(userId)}>Start Trial</button>
-      <div style={{ marginTop: 20 }}>
-        <button onClick={handleChat}>Send Test Chat</button>
-        {reply && (
-          <div style={{ marginTop: 10 }}>
-            <strong>GPT reply:</strong>
-            <div>{reply}</div>
-          </div>
-        )}
+  if (waitingForTelegram) {
+    return <div style={{ padding: 20 }}>Waiting for Telegram context...</div>;
+  }
+  if (error) {
+    return (
+      <div style={{ padding: 20 }}>
+        <h2>Error</h2>
+        <p>{error}</p>
       </div>
-    </div>
+    );
+  }
+  if (!status) {
+    return <div style={{ padding: 20 }}>Loading user status...</div>;
+  }
+
+  // Upgrade screen takes priority
+  if (showUpgrade) {
+    return <Upgrade userId={userId} status={status} onActivated={refreshStatus} />;
+  }
+
+  // If topic selected, show chat
+  if (topic) {
+    return (
+      <Chat
+        userId={userId}
+        topic={topic}
+        onBack={() => setTopic(null)}
+        onLimitExceeded={() => setShowUpgrade(true)}
+        status={status}
+        onStatusRefresh={refreshStatus}
+      />
+    );
+  }
+
+  // If trial not active, show start trial CTA
+  if (status.package === "trial" && !status.trialActive) {
+    return (
+      <div style={{ padding: 20 }}>
+        <h1>Free 1-Day Trial</h1>
+        <p>Activate your trial to access services.</p>
+        <button
+          onClick={async () => {
+            await startTrial(userId);
+            await refreshStatus();
+          }}
+        >
+          Start Trial
+        </button>
+        <div style={{ marginTop: 20 }}>
+          <button onClick={() => setTopic("trade_setup")}>
+            Go to Trade Setup Review
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  // Otherwise show service menu
+  return (
+    <Menu
+      status={status}
+      onSelectTopic={(t) => {
+        setTopic(t);
+      }}
+    />
   );
 }

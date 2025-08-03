@@ -1,7 +1,8 @@
+// app/src/screens/Chat.jsx
 import React, { useState } from "react";
-import { chat, uploadImage } from "../api";
+import { chat, uploadImage } from "../api.js";
 
-export default function Chat({ userId, topic, onBack, onLimitExceeded }) {
+export default function Chat({ userId, topic, onBack, onLimitExceeded, status, onStatusRefresh }) {
   const [input, setInput] = useState("");
   const [history, setHistory] = useState([]);
   const [image, setImage] = useState(null);
@@ -9,7 +10,7 @@ export default function Chat({ userId, topic, onBack, onLimitExceeded }) {
   const [error, setError] = useState(null);
 
   const send = async () => {
-    if (!input.trim() && !image) return; // nothing to send
+    if (!input.trim() && !image) return;
     setLoading(true);
     setError(null);
     let imageDescription = "";
@@ -20,11 +21,10 @@ export default function Chat({ userId, topic, onBack, onLimitExceeded }) {
         form.append("image", image);
         form.append("userId", userId);
         const up = await uploadImage(form);
-        // depending on your backend response shape
-        const filename = up?.filename || up?.data?.filename;
+        const filename = up?.data?.filename || up?.filename;
         imageDescription = filename
           ? `Uploaded image: ${filename}`
-          : "Uploaded image attached";
+          : "Attached image";
       }
 
       const res = await chat({
@@ -34,18 +34,20 @@ export default function Chat({ userId, topic, onBack, onLimitExceeded }) {
         imageDescription,
       });
 
-      // push to history
+      const reply = res?.data?.reply || res.reply || "";
       setHistory((h) => [
         ...h,
         { role: "user", text: input },
-        { role: "ai", text: res?.reply || res?.data?.reply || "" },
+        { role: "ai", text: reply },
       ]);
       setInput("");
       setImage(null);
+      onStatusRefresh && onStatusRefresh();
     } catch (err) {
       console.error("Chat error:", err);
-      const msg = err?.error || (err?.response?.data && err.response.data.error);
-      setError(msg || "Something went wrong.");
+      const msg =
+        err?.response?.data?.error || err?.error || "Failed to get response";
+      setError(msg);
       if (msg === "Trial expired" || msg === "Request limit reached") {
         onLimitExceeded && onLimitExceeded();
       }
@@ -55,7 +57,7 @@ export default function Chat({ userId, topic, onBack, onLimitExceeded }) {
   };
 
   return (
-    <div style={{ maxWidth: 600, margin: "0 auto" }}>
+    <div style={{ padding: 20, maxWidth: 700, margin: "0 auto" }}>
       <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
         {onBack && (
           <button onClick={onBack} aria-label="back">
@@ -76,16 +78,13 @@ export default function Chat({ userId, topic, onBack, onLimitExceeded }) {
               borderRadius: 6,
             }}
           >
-            <strong>{m.role === "user" ? "You:" : "AI:"}</strong>{" "}
-            <span>{m.text}</span>
+            <strong>{m.role === "user" ? "You:" : "AI:"}</strong> {m.text}
           </div>
         ))}
       </div>
 
       {error && (
-        <div style={{ color: "crimson", marginBottom: 8 }}>
-          {error}
-        </div>
+        <div style={{ color: "crimson", marginBottom: 8 }}>{error}</div>
       )}
 
       <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
