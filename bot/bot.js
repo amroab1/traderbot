@@ -13,7 +13,7 @@ bot.start((ctx) => {
           [
             {
               text: "🚀 Open App",
-              web_app: { url: "https://yourapp.com" }
+              web_app: { url: "traderbot-28wbj6jzm-amros-projects-c391cc06.vercel.app" }
             }
           ]
         ]
