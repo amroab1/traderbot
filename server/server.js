@@ -261,12 +261,15 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
 });
 
 // Chat endpoint (hardened + defensive response)
+// Chat endpoint (simplified response send)
 app.post("/api/chat", async (req, res) => {
   const { userId, topic, message, imageFilename } = req.body;
   console.log("Incoming /api/chat", { userId, topic, message, imageFilename });
 
-  if (!userId || !topic || !message)
+  if (!userId || !topic || !message) {
+    console.warn("Validation failed: missing fields", { userId, topic, message });
     return res.status(400).json({ error: "Missing required fields: userId, topic, message" });
+  }
 
   let userRow;
   try {
@@ -276,6 +279,85 @@ app.post("/api/chat", async (req, res) => {
     console.error("getUser failed:", err);
     return res.status(500).json({ error: "User lookup failed" });
   }
+
+  if (userRow.package === "trial") {
+    const now = new Date();
+    const trialStart = new Date(userRow.trial_start);
+    if (
+      now - trialStart >
+      parseInt(process.env.TRIAL_DURATION_HOURS || "24", 10) * 60 * 60 * 1000
+    ) {
+      console.log("Trial expired for", userId);
+      return res.status(403).json({ error: "Trial expired" });
+    }
+  }
+
+  let rateCheck;
+  try {
+    rateCheck = await checkAndIncrement(userId);
+    console.log("Rate check:", rateCheck);
+    if (!rateCheck.allowed) {
+      return res.status(429).json({ error: "Request limit reached", limit: rateCheck.limit });
+    }
+  } catch (err) {
+    console.error("Rate check failed:", err);
+    return res.status(500).json({ error: "Rate limit check failed" });
+  }
+
+  let imageUrl = "";
+  if (imageFilename) {
+    const base = process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`;
+    imageUrl = `${base}/uploads/${imageFilename}`;
+  }
+
+  if (!prompts[topic]) {
+    console.warn("Unknown topic:", topic);
+    return res.status(400).json({ error: "Unknown topic" });
+  }
+
+  let messages;
+  try {
+    messages = prompts[topic](message, imageUrl);
+  } catch (err) {
+    console.error("Prompt builder error:", err);
+    return res.status(500).json({ error: "Prompt construction failed" });
+  }
+
+  let model = process.env.OPENAI_MODEL || "gpt-4";
+  if (imageUrl && process.env.VISION_MODEL) {
+    model = process.env.VISION_MODEL;
+  }
+  console.log("Using model:", model);
+
+  try {
+    const completion = await Promise.race([
+      openai.chat.completions.create({
+        model,
+        messages,
+        temperature: 0.3,
+      }),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("OpenAI request timed out")), 20000)
+      ),
+    ]);
+
+    let reply = completion.choices?.[0]?.message?.content || "";
+    reply = sanitizeReply(reply);
+    if (reply.length > 4000) {
+      reply = reply.slice(0, 4000) + "\n\n*(response truncated for stability)*";
+    }
+    console.log("Reply generated (truncated):", reply.slice(0, 200));
+
+    // Use normal express response
+    return res.json({ reply });
+  } catch (err) {
+    console.error("OpenAI error or timeout:", err);
+    return res.status(500).json({
+      error: err.message || "OpenAI request failed or timed out",
+    });
+  }
+});
+
 
   // Trial expiration
   if (userRow.package === "trial") {
