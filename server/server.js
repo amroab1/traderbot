@@ -8,7 +8,6 @@ setImmediate(() => {
     OPENAI_KEY: !!process.env.OPENAI_KEY,
     ADMIN_SECRET: !!process.env.ADMIN_SECRET,
     BOT_TOKEN: !!process.env.BOT_TOKEN,
-    PUBLIC_BASE_URL: !!process.env.PUBLIC_BASE_URL,
     PORT: process.env.PORT,
   });
 });
@@ -16,19 +15,19 @@ setImmediate(() => {
 const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
-const fetch = global.fetch || require("node-fetch");
+const fetch = require("node-fetch"); // if node v18+ you can use global fetch, otherwise install node-fetch
 const { createClient } = require("@supabase/supabase-js");
 const OpenAI = require("openai");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const prompts = require("./prompts"); // updated prompt builders
+const prompts = require("./prompts"); // your prompt builders: e.g., prompts.trade_setup = (msg, imageDesc) => [...]
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-// expose uploads so images are publicly reachable
+// expose uploads so images can be fetched
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Supabase client
@@ -59,7 +58,7 @@ async function sendTelegramMessage(chatId, text, options = {}) {
   }
 }
 
-// Storage setup
+// Storage for images (local)
 const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 const upload = multer({ dest: uploadDir });
@@ -100,7 +99,7 @@ async function getUser(userId) {
   return upserted;
 }
 
-// Rate limit logic
+// Rate limit / package logic
 async function checkAndIncrement(userId) {
   const user = await getUser(userId);
   const now = new Date();
@@ -141,21 +140,7 @@ async function checkAndIncrement(userId) {
   return { allowed: true, limit };
 }
 
-// Sanitize model reply to strip unwanted self-identification
-function sanitizeReply(text) {
-  if (!text) return text;
-  // remove common disclaimers about being AI or inability to view images
-  const lines = text
-    .split("\n")
-    .filter(
-      (l) =>
-        !/As an AI/i.test(l) &&
-        !/I('?| cannot| can’t) (assist with|view|see) images?/.test(l)
-    );
-  return lines.join("\n").trim();
-}
-
-// Health endpoint
+// Health
 app.get("/health", (req, res) => {
   res.json({ status: "ok", time: new Date().toISOString() });
 });
@@ -248,43 +233,11 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
   }
 });
 
-// Chat endpoint (with image analysis)
+// Chat endpoint (handles imageFilename)
 app.post("/api/chat", async (req, res) => {
   const { userId, topic, message, imageFilename } = req.body;
   if (!userId || !topic || !message)
     return res.status(400).json({ error: "Missing required fields" });
-
-  // Basic trading-related detection: if message looks off-topic, redirect
-  const lower = message.toLowerCase();
-  const tradingKeywords = [
-    "trade",
-    "setup",
-    "risk",
-    "stop loss",
-    "take profit",
-    "entry",
-    "account",
-    "margin",
-    "drawdown",
-    "psychology",
-    "overtrading",
-    "revenge",
-    "funded",
-    "prop firm",
-    "challenge",
-    "position sizing",
-    "strategy",
-    "chart",
-    "support",
-    "resistance",
-  ];
-  const isRelated = tradingKeywords.some((k) => lower.includes(k));
-  if (!isRelated) {
-    return res.json({
-      reply:
-        "I’m specialized in trading support only. Please ask about trade setups, risk management, trading psychology, or account issues.",
-    });
-  }
 
   try {
     const userRow = await getUser(userId);
@@ -308,25 +261,34 @@ app.post("/api/chat", async (req, res) => {
       return res.status(429).json({ error: "Request limit reached", limit });
     }
 
-    // Build prompt
-    let imageUrl = "";
+    const promptBuilder = prompts[topic];
+    if (!promptBuilder)
+      return res.status(400).json({ error: "Unknown topic" });
+
+    // Build base prompt messages
+    let messages = promptBuilder(message, "");
+
+    // If image provided, prepend a user message with image URL context
     if (imageFilename) {
       const base =
         process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`;
-      imageUrl = `${base}/uploads/${imageFilename}`;
+      const imageUrl = `${base}/uploads/${imageFilename}`;
+      messages.unshift({
+        role: "user",
+        content: `Here is the screenshot for the ${topic.replace(
+          "_",
+          " "
+        )} request: ${imageUrl}\nPlease only answer the specific topic and analyze the chart/image accordingly.`,
+      });
     }
-    const messages = prompts[topic](message, imageUrl);
-
-    // choose model (can override via env)
-    const model = process.env.OPENAI_MODEL || "gpt-4";
 
     const completion = await openai.chat.completions.create({
-      model,
+      model: "gpt-4",
       messages,
     });
 
-    let reply = completion.choices?.[0]?.message?.content || "";
-    reply = sanitizeReply(reply);
+    const reply = completion.choices?.[0]?.message?.content;
+    if (!reply) return res.status(500).json({ error: "No reply from OpenAI" });
 
     res.json({ reply });
   } catch (err) {
@@ -335,7 +297,7 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
-// Submit payment
+// Submit payment (user)
 app.post("/api/submit-payment", async (req, res) => {
   const { userId, package: pkg, txid } = req.body;
   if (!userId || !pkg || !txid)
@@ -358,6 +320,7 @@ app.post("/api/submit-payment", async (req, res) => {
         .json({ error: "Failed to store pending payment" });
     }
 
+    // Notify user of submission
     await sendTelegramMessage(
       userId,
       `✅ Payment submission received for *${pkg}* plan.\nTXID: \`${txid}\`\nOur team will review and activate shortly.`,
@@ -374,7 +337,7 @@ app.post("/api/submit-payment", async (req, res) => {
   }
 });
 
-// Get latest pending payment
+// Get latest pending payment for a user
 app.get("/api/pending-payment", async (req, res) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ error: "userId required" });
@@ -412,9 +375,7 @@ app.get("/api/admin/pending-payments", async (req, res) => {
 
     if (error) {
       console.error("GET pending-payments error:", error);
-      return res
-        .status(500)
-        .json({ error: "Failed to fetch pending payments" });
+      return res.status(500).json({ error: "Failed to fetch pending payments" });
     }
 
     res.json(data);
@@ -447,6 +408,7 @@ app.post("/api/admin/approve-payment", async (req, res) => {
     const userId = pending.user_id;
     const pkg = pending.package;
 
+    // Activate user
     await supabase.from("users").upsert({
       id: userId,
       package: pkg,
@@ -454,6 +416,7 @@ app.post("/api/admin/approve-payment", async (req, res) => {
       last_request_reset: new Date().toISOString(),
     });
 
+    // Update pending payment
     await supabase
       .from("pending_payments")
       .update({
@@ -463,6 +426,7 @@ app.post("/api/admin/approve-payment", async (req, res) => {
       })
       .eq("txid", txid);
 
+    // Notify user
     await sendTelegramMessage(
       userId,
       `🎉 Your *${pkg}* plan has been activated. You now have access.`,
@@ -478,4 +442,3 @@ app.post("/api/admin/approve-payment", async (req, res) => {
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log("Server listening on", PORT));
-
