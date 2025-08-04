@@ -1,13 +1,13 @@
 // server/server.js
-require("dotenv").config(); // only once
+require("dotenv").config();
 
-// defer until next tick so dotenv has injected (optional debug)
 setImmediate(() => {
   console.log("ENV status:", {
     SUPABASE_URL: !!process.env.SUPABASE_URL,
     SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
     OPENAI_KEY: !!process.env.OPENAI_KEY,
     ADMIN_SECRET: !!process.env.ADMIN_SECRET,
+    BOT_TOKEN: !!process.env.BOT_TOKEN,
     PORT: process.env.PORT,
   });
 });
@@ -32,15 +32,36 @@ const supabase = createClient(
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// OpenAI client (v4+)
+// OpenAI client
 const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
 
-// Simple storage for uploaded images
+// Telegram helper
+const TELEGRAM_BOT_TOKEN = process.env.BOT_TOKEN;
+async function sendTelegramMessage(chatId, text, options = {}) {
+  if (!TELEGRAM_BOT_TOKEN || !chatId) return;
+  try {
+    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+    const body = { chat_id: chatId, text, ...options };
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const data = await resp.json();
+    if (!data.ok) {
+      console.warn("Telegram sendMessage failed:", data);
+    }
+  } catch (e) {
+    console.error("Telegram sendMessage error:", e);
+  }
+}
+
+// Storage for uploads
 const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 const upload = multer({ dest: uploadDir });
 
-// Utility: get or create user row
+// Utility: get or create user
 async function getUser(userId) {
   const { data, error, status } = await supabase
     .from("users")
@@ -49,13 +70,10 @@ async function getUser(userId) {
     .single();
 
   if (error && status !== 406) {
-    console.warn("Supabase select warning in getUser:", error);
-    // continue to upsert fallback
+    console.warn("getUser select warning:", error);
   }
-
   if (data) return data;
 
-  // create / upsert new user
   const now = new Date().toISOString();
   const { data: upserted, error: upsertErr } = await supabase
     .from("users")
@@ -73,19 +91,17 @@ async function getUser(userId) {
     .single();
 
   if (upsertErr) {
-    console.error("Supabase upsert error in getUser:", upsertErr);
+    console.error("getUser upsert error:", upsertErr);
     throw upsertErr;
   }
-
   return upserted;
 }
 
-// Middleware-style helper: enforce limits
+// Rate limit / package logic
 async function checkAndIncrement(userId) {
   const user = await getUser(userId);
   const now = new Date();
   const lastReset = new Date(user.last_request_reset);
-
   if ((now - lastReset) > 7 * 24 * 60 * 60 * 1000) {
     await supabase
       .from("users")
@@ -106,7 +122,7 @@ async function checkAndIncrement(userId) {
       limit = parseInt(process.env.STARTER_WEEKLY_LIMIT || "5", 10);
       break;
     case "trial":
-      limit = parseInt(process.env.STARTER_WEEKLY_LIMIT || "5", 10); // trial = Starter level
+      limit = parseInt(process.env.STARTER_WEEKLY_LIMIT || "5", 10);
       break;
     default:
       limit = 0;
@@ -122,7 +138,12 @@ async function checkAndIncrement(userId) {
   return { allowed: true, limit };
 }
 
-// Endpoint: get user status
+// Health check
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", time: new Date().toISOString() });
+});
+
+// Get user status
 app.get("/api/user/:id", async (req, res) => {
   try {
     const user = await getUser(req.params.id);
@@ -145,7 +166,7 @@ app.get("/api/user/:id", async (req, res) => {
   }
 });
 
-// Start trial (1-day)
+// Start trial
 app.post("/api/start-trial", async (req, res) => {
   const { userId } = req.body;
   if (!userId) return res.status(400).json({ error: "Missing userId" });
@@ -165,11 +186,12 @@ app.post("/api/start-trial", async (req, res) => {
   }
 });
 
-// Manual activation (after payment)
+// Manual activation
 app.post("/api/activate", async (req, res) => {
   const { userId, package: pkg } = req.body;
   if (!userId || !pkg)
     return res.status(400).json({ error: "Missing userId or package" });
+
   try {
     await supabase.from("users").upsert({
       id: userId,
@@ -190,6 +212,7 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
   const file = req.file;
   if (!userId || !file)
     return res.status(400).json({ error: "Missing userId or image" });
+
   try {
     await supabase.from("images").insert({
       user_id: userId,
@@ -212,7 +235,6 @@ app.post("/api/chat", async (req, res) => {
   try {
     const userRow = await getUser(userId);
 
-    // trial expiry
     if (userRow.package === "trial") {
       const now = new Date();
       const trialStart = new Date(userRow.trial_start);
@@ -229,9 +251,7 @@ app.post("/api/chat", async (req, res) => {
 
     const { allowed, limit } = await checkAndIncrement(userId);
     if (!allowed) {
-      return res
-        .status(429)
-        .json({ error: "Request limit reached", limit });
+      return res.status(429).json({ error: "Request limit reached", limit });
     }
 
     const promptBuilder = prompts[topic];
@@ -253,13 +273,11 @@ app.post("/api/chat", async (req, res) => {
     res.json({ reply });
   } catch (err) {
     console.error("POST /api/chat error:", err);
-    res
-      .status(500)
-      .json({ error: err?.message || "Chat processing failed" });
+    res.status(500).json({ error: err?.message || "Chat processing failed" });
   }
 });
 
-// Submit payment (user side)
+// Submit payment (user)
 app.post("/api/submit-payment", async (req, res) => {
   const { userId, package: pkg, txid } = req.body;
   if (!userId || !pkg || !txid)
@@ -276,13 +294,18 @@ app.post("/api/submit-payment", async (req, res) => {
     });
 
     if (error) {
-      console.error("Failed to insert pending payment:", error);
+      console.error("Insert pending payment error:", error);
       return res
         .status(500)
         .json({ error: "Failed to store pending payment" });
     }
 
-    // TODO: notify admin (e.g., via Telegram) about new pending payment
+    // Notify user of submission
+    await sendTelegramMessage(
+      userId,
+      `✅ Payment submission received for *${pkg}* plan.\nTXID: \`${txid}\`\nOur team will review and activate shortly.`,
+      { parse_mode: "Markdown" }
+    );
 
     res.json({
       success: true,
@@ -294,7 +317,32 @@ app.post("/api/submit-payment", async (req, res) => {
   }
 });
 
-// Admin: list pending payments (protected)
+// Get latest pending payment for a user
+app.get("/api/pending-payment", async (req, res) => {
+  const { userId } = req.query;
+  if (!userId) return res.status(400).json({ error: "userId required" });
+
+  try {
+    const { data, error } = await supabase
+      .from("pending_payments")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .single();
+
+    if (error && error.code !== "PGRST116") {
+      // PGRST116 might be no rows? handle gracefully
+      console.warn("pending-payment fetch warning:", error);
+    }
+    res.json(data || {});
+  } catch (e) {
+    console.error("GET /api/pending-payment error:", e);
+    res.status(500).json({ error: "Internal error" });
+  }
+});
+
+// Admin: list pending payments
 app.get("/api/admin/pending-payments", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
   if (secret !== process.env.ADMIN_SECRET)
@@ -318,7 +366,7 @@ app.get("/api/admin/pending-payments", async (req, res) => {
   }
 });
 
-// Admin: approve payment and activate user
+// Admin: approve payment
 app.post("/api/admin/approve-payment", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
   if (secret !== process.env.ADMIN_SECRET)
@@ -328,7 +376,6 @@ app.post("/api/admin/approve-payment", async (req, res) => {
   if (!txid) return res.status(400).json({ error: "txid required" });
 
   try {
-    // Fetch pending payment
     const { data: pending, error: fetchErr } = await supabase
       .from("pending_payments")
       .select("*")
@@ -350,7 +397,7 @@ app.post("/api/admin/approve-payment", async (req, res) => {
       last_request_reset: new Date().toISOString(),
     });
 
-    // Update pending payment
+    // Update pending payment row
     await supabase
       .from("pending_payments")
       .update({
@@ -359,6 +406,13 @@ app.post("/api/admin/approve-payment", async (req, res) => {
         admin_notes: admin_notes || "Manually approved",
       })
       .eq("txid", txid);
+
+    // Notify user of activation
+    await sendTelegramMessage(
+      userId,
+      `🎉 Your *${pkg}* plan has been activated. You now have access.`,
+      { parse_mode: "Markdown" }
+    );
 
     res.json({ success: true, activated: pkg });
   } catch (e) {
