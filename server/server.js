@@ -9,7 +9,7 @@ process.on("unhandledRejection", (reason, p) => {
   console.error("UNHANDLED REJECTION at:", p, "reason:", reason);
 });
 
-// Deferred env log so dotenv has injected
+// Deferred env log
 setImmediate(() => {
   console.log("ENV status:", {
     SUPABASE_URL: !!process.env.SUPABASE_URL,
@@ -75,12 +75,12 @@ async function sendTelegramMessage(chatId, text, options = {}) {
   }
 }
 
-// Upload storage
+// Upload setup
 const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 const upload = multer({ dest: uploadDir });
 
-// Utility functions
+// Utils
 async function getUser(userId) {
   const { data, error, status } = await supabase
     .from("users")
@@ -168,7 +168,7 @@ function sanitizeReply(text) {
   return lines.join("\n").trim();
 }
 
-// Simple echo for testing
+// Simple echo for diagnostics
 app.post("/api/test-echo", (req, res) => {
   console.log("ECHO /api/test-echo", req.body);
   res.json({ received: req.body });
@@ -217,7 +217,7 @@ app.post("/api/start-trial", async (req, res) => {
   }
 });
 
-// Manual activation
+// Activate package manually
 app.post("/api/activate", async (req, res) => {
   const { userId, package: pkg } = req.body;
   if (!userId || !pkg)
@@ -260,7 +260,7 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
   }
 });
 
-// Chat endpoint (hardened)
+// Chat endpoint (hardened + defensive response)
 app.post("/api/chat", async (req, res) => {
   const { userId, topic, message, imageFilename } = req.body;
   console.log("Incoming /api/chat", { userId, topic, message, imageFilename });
@@ -306,7 +306,7 @@ app.post("/api/chat", async (req, res) => {
     return res.status(500).json({ error: "Rate limit check failed" });
   }
 
-  // Build prompt with optional image
+  // Build prompt (with optional image)
   let imageUrl = "";
   if (imageFilename) {
     const base =
@@ -327,14 +327,14 @@ app.post("/api/chat", async (req, res) => {
     return res.status(500).json({ error: "Prompt construction failed" });
   }
 
-  // Choose model
+  // Model selection
   let model = process.env.OPENAI_MODEL || "gpt-4";
   if (imageUrl && process.env.VISION_MODEL) {
     model = process.env.VISION_MODEL;
   }
   console.log("Using model:", model);
 
-  // Call OpenAI with timeout
+  // OpenAI call with timeout
   const openAiCall = async () => {
     return openai.chat.completions.create({
       model,
@@ -342,8 +342,9 @@ app.post("/api/chat", async (req, res) => {
       temperature: 0.3,
     });
   };
-
   const timeoutMs = 20000;
+
+  let reply = "";
   try {
     const completion = await Promise.race([
       openAiCall(),
@@ -352,15 +353,27 @@ app.post("/api/chat", async (req, res) => {
       ),
     ]);
 
-    let reply = completion.choices?.[0]?.message?.content || "";
+    reply = completion.choices?.[0]?.message?.content || "";
     reply = sanitizeReply(reply);
     console.log("Reply generated (truncated):", reply.slice(0, 200));
-    return res.json({ reply });
   } catch (err) {
     console.error("OpenAI error or timeout:", err);
     return res.status(500).json({
       error: err.message || "OpenAI request failed or timed out",
     });
+  }
+
+  // Defensive send
+  try {
+    const payload = { reply };
+    const bodyStr = JSON.stringify(payload);
+    res.setHeader("Content-Type", "application/json; charset=utf-8");
+    res.setHeader("Content-Length", Buffer.byteLength(bodyStr));
+    res.write(bodyStr);
+    res.end();
+    console.log("Response successfully sent to client");
+  } catch (err) {
+    console.error("Failed to send response to client:", err);
   }
 });
 
