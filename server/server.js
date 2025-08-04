@@ -1,16 +1,12 @@
 // server/server.js
 require("dotenv").config();
 
-setImmediate(() => {
-  console.log("ENV status:", {
-    SUPABASE_URL: !!process.env.SUPABASE_URL,
-    SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
-    OPENAI_KEY: !!process.env.OPENAI_KEY,
-    ADMIN_SECRET: !!process.env.ADMIN_SECRET,
-    BOT_TOKEN: !!process.env.BOT_TOKEN,
-    PUBLIC_BASE_URL: !!process.env.PUBLIC_BASE_URL,
-    PORT: process.env.PORT,
-  });
+// crash visibility
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err);
+});
+process.on("unhandledRejection", (reason, p) => {
+  console.error("UNHANDLED REJECTION at:", p, "reason:", reason);
 });
 
 const express = require("express");
@@ -28,19 +24,24 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-// expose uploads publicly
+// health probe
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", uptime: process.uptime() });
+});
+
+// expose uploaded images
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-// Supabase
+// Supabase client
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// OpenAI
+// OpenAI client
 const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
 
-// Telegram helper
+// Telegram helper (for notifications)
 const TELEGRAM_BOT_TOKEN = process.env.BOT_TOKEN;
 async function sendTelegramMessage(chatId, text, options = {}) {
   if (!TELEGRAM_BOT_TOKEN || !chatId) return;
@@ -64,7 +65,7 @@ const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 const upload = multer({ dest: uploadDir });
 
-// User utility
+// Utilities
 async function getUser(userId) {
   const { data, error, status } = await supabase
     .from("users")
@@ -100,7 +101,6 @@ async function getUser(userId) {
   return upserted;
 }
 
-// Rate limiting
 async function checkAndIncrement(userId) {
   const user = await getUser(userId);
   const now = new Date();
@@ -141,7 +141,7 @@ async function checkAndIncrement(userId) {
   return { allowed: true, limit };
 }
 
-// Sanitize replies (strip self-identification)
+// sanitize model reply (strip self-identification)
 function sanitizeReply(text) {
   if (!text) return text;
   const lines = text
@@ -154,12 +154,13 @@ function sanitizeReply(text) {
   return lines.join("\n").trim();
 }
 
-// Health
-app.get("/health", (req, res) => {
-  res.json({ status: "ok", time: new Date().toISOString() });
+// Echo test (quick isolation)
+app.post("/api/test-echo", (req, res) => {
+  console.log("ECHO /api/test-echo", req.body);
+  res.json({ received: req.body });
 });
 
-// Get user
+// User status
 app.get("/api/user/:id", async (req, res) => {
   try {
     const user = await getUser(req.params.id);
@@ -202,7 +203,7 @@ app.post("/api/start-trial", async (req, res) => {
   }
 });
 
-// Activate package
+// Activate package manually
 app.post("/api/activate", async (req, res) => {
   const { userId, package: pkg } = req.body;
   if (!userId || !pkg)
@@ -245,60 +246,95 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
   }
 });
 
-// Chat handler
+// Chat (core AI interaction)
 app.post("/api/chat", async (req, res) => {
   const { userId, topic, message, imageFilename } = req.body;
+  console.log("Incoming /api/chat", { userId, topic, message, imageFilename });
+
   if (!userId || !topic || !message)
     return res.status(400).json({ error: "Missing required fields" });
 
+  let userRow;
   try {
-    const userRow = await getUser(userId);
+    userRow = await getUser(userId);
+    console.log("User row:", { id: userRow.id, package: userRow.package });
+  } catch (err) {
+    console.error("getUser failed:", err);
+    return res.status(500).json({ error: "User lookup failed" });
+  }
 
-    if (userRow.package === "trial") {
-      const now = new Date();
-      const trialStart = new Date(userRow.trial_start);
-      if (
-        now - trialStart >
-        parseInt(process.env.TRIAL_DURATION_HOURS || "24", 10) *
-          60 *
-          60 *
-          1000
-      ) {
-        return res.status(403).json({ error: "Trial expired" });
-      }
+  // Trial expiration
+  if (userRow.package === "trial") {
+    const now = new Date();
+    const trialStart = new Date(userRow.trial_start);
+    if (
+      now - trialStart >
+      parseInt(process.env.TRIAL_DURATION_HOURS || "24", 10) *
+        60 *
+        60 *
+        1000
+    ) {
+      console.log("Trial expired for", userId);
+      return res.status(403).json({ error: "Trial expired" });
     }
+  }
 
-    const { allowed, limit } = await checkAndIncrement(userId);
-    if (!allowed) {
-      return res.status(429).json({ error: "Request limit reached", limit });
+  // Rate limit
+  let rateCheck;
+  try {
+    rateCheck = await checkAndIncrement(userId);
+    console.log("Rate check:", rateCheck);
+    if (!rateCheck.allowed) {
+      return res
+        .status(429)
+        .json({ error: "Request limit reached", limit: rateCheck.limit });
     }
+  } catch (err) {
+    console.error("Rate check failed:", err);
+    return res.status(500).json({ error: "Rate limit check failed" });
+  }
 
-    // Build prompt with optional image
-    let imageUrl = "";
-    if (imageFilename) {
-      const base =
-        process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`;
-      imageUrl = `${base}/uploads/${imageFilename}`;
-    }
-    const messages = prompts[topic](message, imageUrl);
+  // Build prompt messages
+  let imageUrl = "";
+  if (imageFilename) {
+    const base =
+      process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`;
+    imageUrl = `${base}/uploads/${imageFilename}`;
+  }
 
-    // Model selection: prefer vision model if image present and configured
-    let model = process.env.OPENAI_MODEL || "gpt-4";
-    if (imageUrl && process.env.VISION_MODEL) {
-      model = process.env.VISION_MODEL; // e.g., "gpt-4-vision-preview"
-    }
+  if (!prompts[topic]) {
+    console.warn("Unknown topic:", topic);
+    return res.status(400).json({ error: "Unknown topic" });
+  }
 
+  let messages;
+  try {
+    messages = prompts[topic](message, imageUrl);
+  } catch (err) {
+    console.error("Prompt builder error:", err);
+    return res.status(500).json({ error: "Prompt construction failed" });
+  }
+
+  // Choose model (vision if image and available)
+  let model = process.env.OPENAI_MODEL || "gpt-4";
+  if (imageUrl && process.env.VISION_MODEL) {
+    model = process.env.VISION_MODEL; // e.g., "gpt-4-vision-preview"
+  }
+  console.log("Using model:", model);
+
+  try {
     const completion = await openai.chat.completions.create({
       model,
       messages,
+      temperature: 0.3,
     });
-
     let reply = completion.choices?.[0]?.message?.content || "";
     reply = sanitizeReply(reply);
-    res.json({ reply });
+    console.log("Reply generated");
+    return res.json({ reply });
   } catch (err) {
-    console.error("POST /api/chat error:", err);
-    res.status(500).json({ error: err?.message || "Chat processing failed" });
+    console.error("OpenAI error:", err);
+    return res.status(500).json({ error: "OpenAI request failed" });
   }
 });
 
@@ -318,10 +354,8 @@ app.post("/api/submit-payment", async (req, res) => {
       status: "pending",
     });
     if (error) {
-      console.error("Insert pending payment error:", error);
-      return res
-        .status(500)
-        .json({ error: "Failed to store pending payment" });
+      console.error("pending payment insert error:", error);
+      return res.status(500).json({ error: "Failed to store pending payment" });
     }
 
     await sendTelegramMessage(
@@ -329,18 +363,17 @@ app.post("/api/submit-payment", async (req, res) => {
       `✅ Payment submission received for *${pkg}* plan.\nTXID: \`${txid}\`\nOur team will review and activate shortly.`,
       { parse_mode: "Markdown" }
     );
-
     res.json({
       success: true,
       message: "Payment submitted, awaiting manual verification.",
     });
   } catch (e) {
-    console.error("POST /api/submit-payment error:", e);
+    console.error("submit-payment error:", e);
     res.status(500).json({ error: "Submission failed" });
   }
 });
 
-// Pending payment retrieval
+// Get latest pending payment
 app.get("/api/pending-payment", async (req, res) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ error: "userId required" });
@@ -353,18 +386,17 @@ app.get("/api/pending-payment", async (req, res) => {
       .order("created_at", { ascending: false })
       .limit(1)
       .single();
-
     if (error && error.code !== "PGRST116") {
       console.warn("pending-payment fetch warning:", error);
     }
     res.json(data || {});
   } catch (e) {
-    console.error("GET /api/pending-payment error:", e);
+    console.error("pending-payment retrieval error:", e);
     res.status(500).json({ error: "Internal error" });
   }
 });
 
-// Admin endpoints
+// Admin: list pending payments
 app.get("/api/admin/pending-payments", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
   if (secret !== process.env.ADMIN_SECRET)
@@ -375,19 +407,18 @@ app.get("/api/admin/pending-payments", async (req, res) => {
       .from("pending_payments")
       .select("*")
       .order("created_at", { ascending: false });
-
     if (error) {
-      console.error("GET pending-payments error:", error);
+      console.error("admin pending-payments error:", error);
       return res.status(500).json({ error: "Failed to fetch pending payments" });
     }
-
     res.json(data);
   } catch (e) {
-    console.error("GET /api/admin/pending-payments error:", e);
+    console.error("admin/pending-payments error:", e);
     res.status(500).json({ error: "Internal error" });
   }
 });
 
+// Admin: approve payment
 app.post("/api/admin/approve-payment", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
   if (secret !== process.env.ADMIN_SECRET)
@@ -402,7 +433,6 @@ app.post("/api/admin/approve-payment", async (req, res) => {
       .select("*")
       .eq("txid", txid)
       .single();
-
     if (fetchErr || !pending) {
       return res.status(404).json({ error: "Pending payment not found" });
     }
@@ -434,7 +464,7 @@ app.post("/api/admin/approve-payment", async (req, res) => {
 
     res.json({ success: true, activated: pkg });
   } catch (e) {
-    console.error("POST /api/admin/approve-payment error:", e);
+    console.error("approve-payment error:", e);
     res.status(500).json({ error: "Approval failed" });
   }
 });
