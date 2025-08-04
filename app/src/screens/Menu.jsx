@@ -154,18 +154,26 @@ export default function Menu({ status, onSelectTopic }) {
                 <span role="img" aria-label="support">
                   💬
                 </span>{" "}
-                <a
-                  href="https://t.me/LiveTradeDM"
-                  style={{
-                    color: "#fff",
-                    textDecoration: "none",
-                    fontWeight: 600,
-                  }}
-                  target="_blank"
-                  rel="noreferrer"
-                >
-                  @LiveTradeDM
-                </a>
+                <span
+  onClick={() => {
+    const url = "https://t.me/LiveTradeDM";
+    const tg = window.Telegram?.WebApp;
+    if (tg && typeof tg.openLink === "function") {
+      tg.openLink(url);
+    } else {
+      window.open(url, "_blank");
+    }
+  }}
+  style={{
+    color: "#fff",
+    textDecoration: "underline",
+    fontWeight: 600,
+    cursor: "pointer",
+  }}
+>
+  @LiveTradeDM
+</span>
+
               </div>
               <div style={{ fontSize: 12, marginTop: 6, opacity: 0.9 }}>
                 Need help with payments or access? Message support directly.
