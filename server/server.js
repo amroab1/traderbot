@@ -22,22 +22,22 @@ const OpenAI = require("openai");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const prompts = require("./prompts"); // updated prompt builders
+const prompts = require("./prompts");
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-// expose uploads so images are publicly reachable
+// expose uploads publicly
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
-// Supabase client
+// Supabase
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// OpenAI client
+// OpenAI
 const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
 
 // Telegram helper
@@ -59,12 +59,12 @@ async function sendTelegramMessage(chatId, text, options = {}) {
   }
 }
 
-// Storage setup
+// Storage for uploads
 const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 const upload = multer({ dest: uploadDir });
 
-// Utility: get or create user
+// User utility
 async function getUser(userId) {
   const { data, error, status } = await supabase
     .from("users")
@@ -100,7 +100,7 @@ async function getUser(userId) {
   return upserted;
 }
 
-// Rate limit logic
+// Rate limiting
 async function checkAndIncrement(userId) {
   const user = await getUser(userId);
   const now = new Date();
@@ -141,10 +141,9 @@ async function checkAndIncrement(userId) {
   return { allowed: true, limit };
 }
 
-// Sanitize model reply to strip unwanted self-identification
+// Sanitize replies (strip self-identification)
 function sanitizeReply(text) {
   if (!text) return text;
-  // remove common disclaimers about being AI or inability to view images
   const lines = text
     .split("\n")
     .filter(
@@ -155,12 +154,12 @@ function sanitizeReply(text) {
   return lines.join("\n").trim();
 }
 
-// Health endpoint
+// Health
 app.get("/health", (req, res) => {
   res.json({ status: "ok", time: new Date().toISOString() });
 });
 
-// Get user status
+// Get user
 app.get("/api/user/:id", async (req, res) => {
   try {
     const user = await getUser(req.params.id);
@@ -203,12 +202,11 @@ app.post("/api/start-trial", async (req, res) => {
   }
 });
 
-// Manual activation
+// Activate package
 app.post("/api/activate", async (req, res) => {
   const { userId, package: pkg } = req.body;
   if (!userId || !pkg)
     return res.status(400).json({ error: "Missing userId or package" });
-
   try {
     await supabase.from("users").upsert({
       id: userId,
@@ -229,7 +227,6 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
   const file = req.file;
   if (!userId || !file)
     return res.status(400).json({ error: "Missing userId or image" });
-
   try {
     await supabase.from("images").insert({
       user_id: userId,
@@ -248,43 +245,11 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
   }
 });
 
-// Chat endpoint (with image analysis)
+// Chat handler
 app.post("/api/chat", async (req, res) => {
   const { userId, topic, message, imageFilename } = req.body;
   if (!userId || !topic || !message)
     return res.status(400).json({ error: "Missing required fields" });
-
-  // Basic trading-related detection: if message looks off-topic, redirect
-  const lower = message.toLowerCase();
-  const tradingKeywords = [
-    "trade",
-    "setup",
-    "risk",
-    "stop loss",
-    "take profit",
-    "entry",
-    "account",
-    "margin",
-    "drawdown",
-    "psychology",
-    "overtrading",
-    "revenge",
-    "funded",
-    "prop firm",
-    "challenge",
-    "position sizing",
-    "strategy",
-    "chart",
-    "support",
-    "resistance",
-  ];
-  const isRelated = tradingKeywords.some((k) => lower.includes(k));
-  if (!isRelated) {
-    return res.json({
-      reply:
-        "I’m specialized in trading support only. Please ask about trade setups, risk management, trading psychology, or account issues.",
-    });
-  }
 
   try {
     const userRow = await getUser(userId);
@@ -308,7 +273,7 @@ app.post("/api/chat", async (req, res) => {
       return res.status(429).json({ error: "Request limit reached", limit });
     }
 
-    // Build prompt
+    // Build prompt with optional image
     let imageUrl = "";
     if (imageFilename) {
       const base =
@@ -317,8 +282,11 @@ app.post("/api/chat", async (req, res) => {
     }
     const messages = prompts[topic](message, imageUrl);
 
-    // choose model (can override via env)
-    const model = process.env.OPENAI_MODEL || "gpt-4";
+    // Model selection: prefer vision model if image present and configured
+    let model = process.env.OPENAI_MODEL || "gpt-4";
+    if (imageUrl && process.env.VISION_MODEL) {
+      model = process.env.VISION_MODEL; // e.g., "gpt-4-vision-preview"
+    }
 
     const completion = await openai.chat.completions.create({
       model,
@@ -327,7 +295,6 @@ app.post("/api/chat", async (req, res) => {
 
     let reply = completion.choices?.[0]?.message?.content || "";
     reply = sanitizeReply(reply);
-
     res.json({ reply });
   } catch (err) {
     console.error("POST /api/chat error:", err);
@@ -335,7 +302,7 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
-// Submit payment
+// Payment submission
 app.post("/api/submit-payment", async (req, res) => {
   const { userId, package: pkg, txid } = req.body;
   if (!userId || !pkg || !txid)
@@ -350,7 +317,6 @@ app.post("/api/submit-payment", async (req, res) => {
       txid,
       status: "pending",
     });
-
     if (error) {
       console.error("Insert pending payment error:", error);
       return res
@@ -374,7 +340,7 @@ app.post("/api/submit-payment", async (req, res) => {
   }
 });
 
-// Get latest pending payment
+// Pending payment retrieval
 app.get("/api/pending-payment", async (req, res) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ error: "userId required" });
@@ -398,7 +364,7 @@ app.get("/api/pending-payment", async (req, res) => {
   }
 });
 
-// Admin: list pending payments
+// Admin endpoints
 app.get("/api/admin/pending-payments", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
   if (secret !== process.env.ADMIN_SECRET)
@@ -412,9 +378,7 @@ app.get("/api/admin/pending-payments", async (req, res) => {
 
     if (error) {
       console.error("GET pending-payments error:", error);
-      return res
-        .status(500)
-        .json({ error: "Failed to fetch pending payments" });
+      return res.status(500).json({ error: "Failed to fetch pending payments" });
     }
 
     res.json(data);
@@ -424,7 +388,6 @@ app.get("/api/admin/pending-payments", async (req, res) => {
   }
 });
 
-// Admin: approve payment
 app.post("/api/admin/approve-payment", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
   if (secret !== process.env.ADMIN_SECRET)

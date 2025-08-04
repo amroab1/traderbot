@@ -60,7 +60,7 @@ module.exports = {
       parts.push(`Account screenshot: ${imageUrl}`);
     }
     parts.push(
-      `Account details: ${accountInfo}. Provide breakdown of:
+      `Account details: ${accountInfo}. Provide a breakdown of:
 - Risk exposure
 - Lot sizing
 - Overtrading signs
@@ -76,7 +76,7 @@ module.exports = {
       parts.push(`Optional context screenshot: ${imageUrl}`);
     }
     parts.push(
-      `User emotional state: ${stateDescription}. Provide mindset support, actionable coping techniques, and encouragement. Identify if they show signs of revenge trading, overtrading, fear, or overconfidence.`
+      `User emotional state: ${stateDescription}. Provide mindset support, actionable coping techniques, and encouragement. Identify if they show signs of revenge trading, overtrading, fear, or overconfidence. Emphasize staying disciplined and preserving capital, and help them refocus.`
     );
     const userContent = parts.join("\n\n");
     return buildMessage(userContent);
@@ -88,7 +88,7 @@ module.exports = {
       parts.push(`Challenge/stats screenshot: ${imageUrl}`);
     }
     parts.push(
-      `Details: ${details}. Review if the user is at risk of violation, managing lots correctly, and on track to pass. Highlight rule compliance, drawdown risk, and suggestions to stay within evaluation parameters.`
+      `Details: ${details}. Review whether the user is at risk of violation, managing position sizing properly, and on track to pass the evaluation. Highlight compliance with rules, drawdown risk, and give suggestions to stay within acceptable boundaries.`
     );
     const userContent = parts.join("\n\n");
     return buildMessage(userContent);
@@ -100,7 +100,7 @@ module.exports = {
       parts.push(`Critical screenshot: ${imageUrl}`);
     }
     parts.push(
-      `Emergency margin call details: ${details}. Provide immediate risk mitigation steps, what to close first, how to reduce exposure, and psychological calm strategies. Emphasize capital preservation.`
+      `Emergency margin call details: ${details}. Provide immediate risk mitigation steps, including what to close first, how to reduce exposure, and psychological advice to remain calm. Emphasize preserving capital above all.`
     );
     const userContent = parts.join("\n\n");
     return buildMessage(userContent);

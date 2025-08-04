@@ -21,7 +21,7 @@ export default function Chat({
   onStatusRefresh,
 }) {
   const [input, setInput] = useState("");
-  const [history, setHistory] = useState([]); // { role, text, image }
+  const [history, setHistory] = useState([]);
   const [image, setImage] = useState(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
@@ -29,7 +29,7 @@ export default function Chat({
   const [usageInfo, setUsageInfo] = useState(null);
   const [isWarmed, setIsWarmed] = useState(false);
 
-  // Load persisted history
+  // load stored
   useEffect(() => {
     if (userId && topic) {
       const stored = localStorage.getItem(STORAGE_KEY(userId, topic));
@@ -41,17 +41,13 @@ export default function Chat({
     }
   }, [userId, topic]);
 
-  // Persist history when changes
   useEffect(() => {
     if (userId && topic) {
-      localStorage.setItem(
-        STORAGE_KEY(userId, topic),
-        JSON.stringify(history)
-      );
+      localStorage.setItem(STORAGE_KEY(userId, topic), JSON.stringify(history));
     }
   }, [history, userId, topic]);
 
-  // Pre-warm user row
+  // pre-warm user
   useEffect(() => {
     if (!userId) return;
     (async () => {
@@ -69,20 +65,10 @@ export default function Chat({
     })();
   }, [userId]);
 
-  // Refresh parent status
   useEffect(() => {
     if (onStatusRefresh) onStatusRefresh();
   }, []);
 
-  // Scroll on history change
-  useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current?.scrollHeight,
-      behavior: "smooth",
-    });
-  }, [history]);
-
-  // Usage info
   useEffect(() => {
     if (status) {
       const limits = {
@@ -101,6 +87,13 @@ export default function Chat({
       }
     }
   }, [status]);
+
+  useEffect(() => {
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current?.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [history]);
 
   const handleAttach = (e) => {
     if (e.target.files && e.target.files[0]) {
@@ -139,24 +132,17 @@ export default function Chat({
         }
       }
 
-      try {
-        const res = await chat({
-          userId,
-          topic,
-          message: userMessage || "(image only)",
-          imageFilename,
-        });
+      const res = await chat({
+        userId,
+        topic,
+        message: userMessage || "(image only)",
+        imageFilename,
+      });
 
-        if (res.data?.reply) {
-          setHistory((h) => [...h, { role: "ai", text: res.data.reply }]);
-          return;
-        }
-        if (res.data?.error) {
-          throw new Error(res.data.error);
-        }
-        throw new Error("Unknown response");
-      } catch (err) {
-        throw err;
+      if (res.data?.reply) {
+        setHistory((h) => [...h, { role: "ai", text: res.data.reply }]);
+      } else if (res.data?.error) {
+        throw new Error(res.data.error);
       }
     };
 
