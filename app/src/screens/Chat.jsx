@@ -1,6 +1,6 @@
 // app/src/screens/Chat.jsx
 import React, { useState, useEffect, useRef } from "react";
-import { chat, uploadImage, getUser } from "../api.js"; // adjust if getUser isn't exported
+import { chat, uploadImage } from "../api.js"; // ensure these are exported
 
 const topicTitles = {
   trade_setup: "Trade Setup Review",
@@ -25,74 +25,44 @@ export default function Chat({
   const [error, setError] = useState(null);
   const scrollRef = useRef(null);
   const [usageInfo, setUsageInfo] = useState(null);
+  const [isWarmed, setIsWarmed] = useState(false);
 
-  // fetch latest status if needed
+  // Pre-warm user row so first chat doesn't race
+  useEffect(() => {
+    if (!userId) return;
+    (async () => {
+      try {
+        await fetch(
+          `${import.meta.env.VITE_API_URL || "https://server-production-dd28.up.railway.app"}/api/user/${encodeURIComponent(
+            userId
+          )}`
+        );
+      } catch (e) {
+        console.warn("Pre-warm user failed:", e);
+      } finally {
+        setIsWarmed(true);
+      }
+    })();
+  }, [userId]);
+
+  // refresh parent status if provided
   useEffect(() => {
     if (onStatusRefresh) onStatusRefresh();
   }, []);
 
-  // scroll to bottom when history changes
+  // scroll to bottom when history updates
   useEffect(() => {
     scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
+      top: scrollRef.current?.scrollHeight,
       behavior: "smooth",
     });
   }, [history]);
 
-  const handleSend = async () => {
-    if (!input.trim() && !image) return;
-    setError(null);
-    setSending(true);
-
-    // append user message immediately
-    const newHistory = [
-      ...history,
-      { role: "user", text: input.trim(), image: image ? URL.createObjectURL(image) : null },
-    ];
-    setHistory(newHistory);
-    setInput("");
-
-    let imageDescription = "";
-    try {
-      if (image) {
-        const form = new FormData();
-        form.append("image", image);
-        form.append("userId", userId);
-        const up = await uploadImage(form);
-        imageDescription = `Uploaded image filename: ${up.data.filename}`;
-      }
-
-      const res = await chat({
-        userId,
-        topic,
-        message: input.trim() || "(image only)",
-        imageDescription,
-      });
-
-      if (res.data?.reply) {
-        setHistory((h) => [
-          ...h,
-          { role: "ai", text: res.data.reply },
-        ]);
-      } else if (res.data?.error) {
-        setError(res.data.error);
-      }
-    } catch (e) {
-      console.error(e);
-      setError("Failed to send. Try again.");
-    } finally {
-      setSending(false);
-      setImage(null);
-      // refresh usage info if provided
-      if (onStatusRefresh) onStatusRefresh();
-    }
-  };
-
-  // Optionally show upgraded limit exceeded
+  // compute usage info
   useEffect(() => {
     if (status) {
       const limits = {
-        trial: parseInt(import.meta.env.VITE_TRIAL_LIMIT || "5", 10),
+        trial: parseInt(import.meta.env.VITE_STARTER_WEEKLY_LIMIT || "5", 10),
         Starter: parseInt(import.meta.env.VITE_STARTER_WEEKLY_LIMIT || "5", 10),
         Pro: parseInt(import.meta.env.VITE_PRO_WEEKLY_LIMIT || "10", 10),
         Elite: Infinity,
@@ -111,6 +81,77 @@ export default function Chat({
   const handleAttach = (e) => {
     if (e.target.files && e.target.files[0]) {
       setImage(e.target.files[0]);
+    }
+  };
+
+  const handleSend = async () => {
+    if (!input.trim() && !image) return;
+    setError(null);
+    setSending(true);
+
+    const userMessage = input.trim();
+    // optimistic user bubble
+    setHistory((h) => [
+      ...h,
+      {
+        role: "user",
+        text: userMessage || "(image only)",
+        image: image ? URL.createObjectURL(image) : null,
+      },
+    ]);
+    setInput("");
+
+    let imageDescription = "";
+
+    const doChatRequest = async () => {
+      if (image) {
+        const form = new FormData();
+        form.append("image", image);
+        form.append("userId", userId);
+        try {
+          const up = await uploadImage(form);
+          imageDescription = `Uploaded image filename: ${up.data.filename}`;
+        } catch (e) {
+          console.warn("Image upload failed:", e);
+        }
+      }
+
+      try {
+        const res = await chat({
+          userId,
+          topic,
+          message: userMessage || "(image only)",
+          imageDescription,
+        });
+
+        if (res.data?.reply) {
+          setHistory((h) => [...h, { role: "ai", text: res.data.reply }]);
+          return;
+        }
+        if (res.data?.error) {
+          throw new Error(res.data.error);
+        }
+        throw new Error("Unknown response from server");
+      } catch (err) {
+        throw err;
+      }
+    };
+
+    try {
+      await doChatRequest();
+    } catch (firstErr) {
+      console.warn("First attempt failed:", firstErr);
+      await new Promise((r) => setTimeout(r, 500));
+      try {
+        await doChatRequest();
+      } catch (secondErr) {
+        console.error("Second attempt failed:", secondErr);
+        setError(secondErr.message || "Failed to send. Try again.");
+      }
+    } finally {
+      setSending(false);
+      setImage(null);
+      if (onStatusRefresh) onStatusRefresh();
     }
   };
 
@@ -173,7 +214,7 @@ export default function Chat({
             }}
           >
             <div style={{ fontWeight: 600 }}>
-              {status.package} • Used {usageInfo.used} /{" "}
+              {status?.package} • Used {usageInfo.used} /{" "}
               {usageInfo.limit === Infinity ? "∞" : usageInfo.limit}
             </div>
           </div>
@@ -203,7 +244,6 @@ export default function Chat({
               alignItems: "flex-start",
             }}
           >
-            {/* Avatar placeholder */}
             <div
               style={{
                 width: 36,
@@ -281,149 +321,156 @@ export default function Chat({
 
       {/* Input area */}
       <div
-  style={{
-    padding: 12,
-    borderTop: "1px solid rgba(255,255,255,0.05)",
-    background: "#0f111a",
-    display: "flex",
-    flexDirection: "column",
-    gap: 6,
-  }}
->
-  {image && (
-    <div
-      style={{
-        display: "flex",
-        gap: 12,
-        alignItems: "center",
-        background: "#1f224f",
-        padding: 8,
-        borderRadius: 8,
-      }}
-    >
-      <div
         style={{
-          width: 50,
-          height: 50,
-          borderRadius: 6,
-          overflow: "hidden",
-          flexShrink: 0,
+          padding: 12,
+          borderTop: "1px solid rgba(255,255,255,0.05)",
+          background: "#0f111a",
+          display: "flex",
+          flexDirection: "column",
+          gap: 6,
         }}
       >
-        <img
-          src={URL.createObjectURL(image)}
-          alt="preview"
-          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+        {image && (
+          <div
+            style={{
+              display: "flex",
+              gap: 12,
+              alignItems: "center",
+              background: "#1f224f",
+              padding: 8,
+              borderRadius: 8,
+            }}
+          >
+            <div
+              style={{
+                width: 50,
+                height: 50,
+                borderRadius: 6,
+                overflow: "hidden",
+                flexShrink: 0,
+              }}
+            >
+              <img
+                src={URL.createObjectURL(image)}
+                alt="preview"
+                style={{ width: "100%", height: "100%", objectFit: "cover" }}
+              />
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ fontSize: 14, fontWeight: 600 }}>{image.name}</div>
+              <div style={{ fontSize: 12, opacity: 0.75 }}>
+                {Math.round(image.size / 1024)} KB
+              </div>
+            </div>
+            <button
+              onClick={() => setImage(null)}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "#fff",
+                cursor: "pointer",
+                fontSize: 20,
+                padding: 4,
+              }}
+              aria-label="Remove"
+            >
+              ×
+            </button>
+          </div>
+        )}
+
+        <textarea
+          aria-label="Your message"
+          placeholder="Describe your setup or feeling..."
+          value={input}
+          onChange={(e) => setInput(e.target.value)}
+          rows={2}
+          style={{
+            width: "100%",
+            resize: "none",
+            padding: "14px 16px",
+            borderRadius: 14,
+            border: "1px solid rgba(255,255,255,0.08)",
+            background: "#1e1f2f",
+            color: "#fff",
+            fontSize: 14,
+            outline: "none",
+            overflow: "auto",
+            boxSizing: "border-box",
+            minHeight: 64,
+          }}
+          onKeyDown={(e) => {
+            if (e.key === "Enter" && !e.shiftKey) {
+              e.preventDefault();
+              handleSend();
+            }
+          }}
         />
-      </div>
-      <div style={{ flex: 1 }}>
-        <div style={{ fontSize: 14, fontWeight: 600 }}>{image.name}</div>
-        <div style={{ fontSize: 12, opacity: 0.75 }}>
-          {Math.round(image.size / 1024)} KB
+
+        <div
+          style={{
+            display: "flex",
+            justifyContent: "space-between",
+            alignItems: "center",
+            gap: 12,
+            flexWrap: "wrap",
+          }}
+        >
+          <label
+            style={{
+              background: "#2a2f7f",
+              padding: "10px 16px",
+              borderRadius: 12,
+              cursor: "pointer",
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+              fontSize: 14,
+              fontWeight: 600,
+            }}
+          >
+            Attach
+            <input
+              type="file"
+              accept="image/*"
+              style={{ display: "none" }}
+              onChange={handleAttach}
+            />
+          </label>
+          <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+            <button
+              onClick={handleSend}
+              disabled={
+                sending || ((!input.trim() && !image) || !isWarmed)
+              }
+              style={{
+                background: "#6c63ff",
+                border: "none",
+                padding: "12px 24px",
+                borderRadius: 14,
+                cursor: "pointer",
+                fontWeight: 600,
+                fontSize: 14,
+                color: "#fff",
+                minWidth: 100,
+                opacity: sending ? 0.8 : 1,
+                position: "relative",
+              }}
+            >
+              {sending
+                ? "Sending..."
+                : !isWarmed
+                ? "Preparing..."
+                : "Send"}
+            </button>
+          </div>
+        </div>
+
+        <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
+          {status?.package} plan • Used {status?.requestsWeek} /{" "}
+          {status?.package === "Elite" ? "∞" : usageInfoText(status)}
         </div>
       </div>
-      <button
-        onClick={() => setImage(null)}
-        style={{
-          background: "transparent",
-          border: "none",
-          color: "#fff",
-          cursor: "pointer",
-          fontSize: 20,
-          padding: 4,
-        }}
-        aria-label="Remove"
-      >
-        ×
-      </button>
-    </div>
-  )}
-
-  <textarea
-    aria-label="Your message"
-    placeholder="Describe your setup or feeling..."
-    value={input}
-    onChange={(e) => setInput(e.target.value)}
-    rows={2}
-    style={{
-      width: "100%",
-      resize: "none",
-      padding: "14px 16px",
-      borderRadius: 14,
-      border: "1px solid rgba(255,255,255,0.08)",
-      background: "#1e1f2f",
-      color: "#fff",
-      fontSize: 14,
-      outline: "none",
-      overflow: "auto",
-      boxSizing: "border-box",
-      minHeight: 64,
-    }}
-    onKeyDown={(e) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        handleSend();
-      }
-    }}
-  />
-
-  <div
-    style={{
-      display: "flex",
-      justifyContent: "space-between",
-      alignItems: "center",
-      gap: 12,
-      flexWrap: "wrap",
-    }}
-  >
-    <label
-      style={{
-        background: "#2a2f7f",
-        padding: "10px 16px",
-        borderRadius: 12,
-        cursor: "pointer",
-        display: "inline-flex",
-        alignItems: "center",
-        gap: 6,
-        fontSize: 14,
-        fontWeight: 600,
-      }}
-    >
-      Attach
-      <input
-        type="file"
-        accept="image/*"
-        style={{ display: "none" }}
-        onChange={handleAttach}
-      />
-    </label>
-    <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
-      <button
-        onClick={handleSend}
-        disabled={sending || (!input.trim() && !image)}
-        style={{
-          background: "#6c63ff",
-          border: "none",
-          padding: "12px 24px",
-          borderRadius: 14,
-          cursor: "pointer",
-          fontWeight: 600,
-          fontSize: 14,
-          color: "#fff",
-          minWidth: 100,
-          opacity: sending ? 0.8 : 1,
-        }}
-      >
-        {sending ? "Sending..." : "Send"}
-      </button>
-    </div>
-  </div>
-
-  <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
-    {status?.package} plan • Used {status?.requestsWeek} /{" "}
-    {status?.package === "Elite" ? "∞" : usageInfoText(status)}
-  </div>
-</div>
     </div>
   );
 }
