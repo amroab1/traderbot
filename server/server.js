@@ -1,12 +1,27 @@
 // server/server.js
 require("dotenv").config();
 
-// crash visibility
+// Crash visibility
 process.on("uncaughtException", (err) => {
   console.error("UNCAUGHT EXCEPTION:", err);
 });
 process.on("unhandledRejection", (reason, p) => {
   console.error("UNHANDLED REJECTION at:", p, "reason:", reason);
+});
+
+// Deferred env log so dotenv has injected
+setImmediate(() => {
+  console.log("ENV status:", {
+    SUPABASE_URL: !!process.env.SUPABASE_URL,
+    SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
+    OPENAI_KEY: !!process.env.OPENAI_KEY,
+    OPENAI_MODEL: !!process.env.OPENAI_MODEL,
+    VISION_MODEL: !!process.env.VISION_MODEL,
+    PUBLIC_BASE_URL: !!process.env.PUBLIC_BASE_URL,
+    BOT_TOKEN: !!process.env.BOT_TOKEN,
+    ADMIN_SECRET: !!process.env.ADMIN_SECRET,
+    PORT: process.env.PORT,
+  });
 });
 
 const express = require("express");
@@ -24,12 +39,12 @@ const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-// health probe
+// Health probe
 app.get("/health", (req, res) => {
   res.json({ status: "ok", uptime: process.uptime() });
 });
 
-// expose uploaded images
+// Serve uploaded images
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Supabase client
@@ -41,7 +56,7 @@ const supabase = createClient(
 // OpenAI client
 const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
 
-// Telegram helper (for notifications)
+// Telegram helper for notifications
 const TELEGRAM_BOT_TOKEN = process.env.BOT_TOKEN;
 async function sendTelegramMessage(chatId, text, options = {}) {
   if (!TELEGRAM_BOT_TOKEN || !chatId) return;
@@ -60,12 +75,12 @@ async function sendTelegramMessage(chatId, text, options = {}) {
   }
 }
 
-// Storage for uploads
+// Upload storage
 const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 const upload = multer({ dest: uploadDir });
 
-// Utilities
+// Utility functions
 async function getUser(userId) {
   const { data, error, status } = await supabase
     .from("users")
@@ -141,7 +156,6 @@ async function checkAndIncrement(userId) {
   return { allowed: true, limit };
 }
 
-// sanitize model reply (strip self-identification)
 function sanitizeReply(text) {
   if (!text) return text;
   const lines = text
@@ -154,13 +168,13 @@ function sanitizeReply(text) {
   return lines.join("\n").trim();
 }
 
-// Echo test (quick isolation)
+// Simple echo for testing
 app.post("/api/test-echo", (req, res) => {
   console.log("ECHO /api/test-echo", req.body);
   res.json({ received: req.body });
 });
 
-// User status
+// Get user status
 app.get("/api/user/:id", async (req, res) => {
   try {
     const user = await getUser(req.params.id);
@@ -203,7 +217,7 @@ app.post("/api/start-trial", async (req, res) => {
   }
 });
 
-// Activate package manually
+// Manual activation
 app.post("/api/activate", async (req, res) => {
   const { userId, package: pkg } = req.body;
   if (!userId || !pkg)
@@ -246,13 +260,13 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
   }
 });
 
-// Chat (core AI interaction)
+// Chat endpoint (hardened)
 app.post("/api/chat", async (req, res) => {
   const { userId, topic, message, imageFilename } = req.body;
   console.log("Incoming /api/chat", { userId, topic, message, imageFilename });
 
   if (!userId || !topic || !message)
-    return res.status(400).json({ error: "Missing required fields" });
+    return res.status(400).json({ error: "Missing required fields: userId, topic, message" });
 
   let userRow;
   try {
@@ -285,16 +299,14 @@ app.post("/api/chat", async (req, res) => {
     rateCheck = await checkAndIncrement(userId);
     console.log("Rate check:", rateCheck);
     if (!rateCheck.allowed) {
-      return res
-        .status(429)
-        .json({ error: "Request limit reached", limit: rateCheck.limit });
+      return res.status(429).json({ error: "Request limit reached", limit: rateCheck.limit });
     }
   } catch (err) {
     console.error("Rate check failed:", err);
     return res.status(500).json({ error: "Rate limit check failed" });
   }
 
-  // Build prompt messages
+  // Build prompt with optional image
   let imageUrl = "";
   if (imageFilename) {
     const base =
@@ -315,26 +327,40 @@ app.post("/api/chat", async (req, res) => {
     return res.status(500).json({ error: "Prompt construction failed" });
   }
 
-  // Choose model (vision if image and available)
+  // Choose model
   let model = process.env.OPENAI_MODEL || "gpt-4";
   if (imageUrl && process.env.VISION_MODEL) {
-    model = process.env.VISION_MODEL; // e.g., "gpt-4-vision-preview"
+    model = process.env.VISION_MODEL;
   }
   console.log("Using model:", model);
 
-  try {
-    const completion = await openai.chat.completions.create({
+  // Call OpenAI with timeout
+  const openAiCall = async () => {
+    return openai.chat.completions.create({
       model,
       messages,
       temperature: 0.3,
     });
+  };
+
+  const timeoutMs = 20000;
+  try {
+    const completion = await Promise.race([
+      openAiCall(),
+      new Promise((_, reject) =>
+        setTimeout(() => reject(new Error("OpenAI request timed out")), timeoutMs)
+      ),
+    ]);
+
     let reply = completion.choices?.[0]?.message?.content || "";
     reply = sanitizeReply(reply);
-    console.log("Reply generated");
+    console.log("Reply generated (truncated):", reply.slice(0, 200));
     return res.json({ reply });
   } catch (err) {
-    console.error("OpenAI error:", err);
-    return res.status(500).json({ error: "OpenAI request failed" });
+    console.error("OpenAI error or timeout:", err);
+    return res.status(500).json({
+      error: err.message || "OpenAI request failed or timed out",
+    });
   }
 });
 
@@ -342,9 +368,7 @@ app.post("/api/chat", async (req, res) => {
 app.post("/api/submit-payment", async (req, res) => {
   const { userId, package: pkg, txid } = req.body;
   if (!userId || !pkg || !txid)
-    return res
-      .status(400)
-      .json({ error: "userId, package, and txid required" });
+    return res.status(400).json({ error: "userId, package, and txid required" });
 
   try {
     const { error } = await supabase.from("pending_payments").insert({
