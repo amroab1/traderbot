@@ -25,12 +25,7 @@ const fs = require("fs");
 const prompts = require("./prompts");
 
 const app = express();
-app.use(
-  cors({
-    origin: true,
-    credentials: true,
-  })
-);
+app.use(cors({ origin: true, credentials: true }));
 app.use(bodyParser.json());
 
 // Supabase client
@@ -76,6 +71,7 @@ async function getUser(userId) {
     .single();
   if (error && status !== 406) console.warn("getUser select:", error);
   if (data) return data;
+
   const now = new Date().toISOString();
   const { data: upserted, error: upsertErr } = await supabase
     .from("users")
@@ -210,7 +206,6 @@ app.post("/api/chat", async (req, res) => {
     return res.status(400).json({ error: "Missing fields" });
   try {
     const userRow = await getUser(userId);
-    // expire trial if needed
     if (userRow.package === "trial") {
       const start = new Date(userRow.trial_start).getTime();
       const limitMs = (+process.env.TRIAL_DURATION_HOURS || 24) * 36e5;
@@ -269,13 +264,12 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
-// — Expose conversation for user-side polling —
+// Expose conversation for user side
 app.get("/api/conversation", async (req, res) => {
   const { userId, topic } = req.query;
   if (!userId || !topic)
     return res.status(400).json({ error: "userId and topic required" });
   try {
-    // fetch or create conversation
     const { data: convs } = await supabase
       .from("conversations")
       .select("*")
@@ -292,14 +286,11 @@ app.get("/api/conversation", async (req, res) => {
         .single();
       conversation = nc;
     }
-
-    // fetch all messages
     const { data: messages } = await supabase
       .from("messages")
       .select("*")
       .eq("conversation_id", conversation.id)
       .order("created_at", { ascending: true });
-
     res.json({ conversation, messages });
   } catch (e) {
     console.error("GET /api/conversation error:", e);
@@ -307,7 +298,7 @@ app.get("/api/conversation", async (req, res) => {
   }
 });
 
-// — Admin-only endpoints —
+// Admin-only endpoints
 
 // List pending payments
 app.get("/api/admin/pending-payments", async (req, res) => {
@@ -378,7 +369,7 @@ app.post("/api/admin/approve-payment", async (req, res) => {
   }
 });
 
-// Admin: fetch conversation
+// Fetch conversation as admin
 app.get("/api/admin/conversation", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
   if (secret !== process.env.ADMIN_SECRET)
@@ -389,7 +380,6 @@ app.get("/api/admin/conversation", async (req, res) => {
     return res.status(400).json({ error: "userId and topic required" });
 
   try {
-    // fetch or create conversation
     const { data: convs } = await supabase
       .from("conversations")
       .select("id")
@@ -401,15 +391,12 @@ app.get("/api/admin/conversation", async (req, res) => {
       return res.json({ conversation: null, messages: [] });
     }
     const conv = convs[0];
-
-    // fetch messages
     const { data: messages, error: msgErr } = await supabase
       .from("messages")
       .select("*")
       .eq("conversation_id", conv.id)
       .order("created_at", { ascending: true });
     if (msgErr) throw msgErr;
-
     res.json({ conversation: conv, messages });
   } catch (e) {
     console.error("GET /api/admin/conversation error:", e);
@@ -417,7 +404,7 @@ app.get("/api/admin/conversation", async (req, res) => {
   }
 });
 
-// Admin: respond & notify user
+// Admin: respond & notify user with “Open App” button
 app.post("/api/admin/respond", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
   if (secret !== process.env.ADMIN_SECRET)
@@ -428,7 +415,6 @@ app.post("/api/admin/respond", async (req, res) => {
     return res.status(400).json({ error: "Missing fields" });
 
   try {
-    // fetch or create conversation
     const { data: convs } = await supabase
       .from("conversations")
       .select("id")
@@ -454,11 +440,23 @@ app.post("/api/admin/respond", async (req, res) => {
       is_final: !!markFinal,
     });
 
-    // notify via Telegram
+    // notify via Telegram with “Open App” button
     await sendTelegramMessage(
       userId,
-      `✉️ *Support Reply*\n\n${reply}`,
-      { parse_mode: "Markdown" }
+      `✉️ *Support Reply*\n\n${reply}\n\nClick below to view full chat in the app:`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: JSON.stringify({
+          inline_keyboard: [
+            [
+              {
+                text: "💬 Open Support App",
+                web_app: { url: process.env.PUBLIC_BASE_URL }
+              }
+            ]
+          ]
+        })
+      }
     );
 
     res.json({ success: true });
