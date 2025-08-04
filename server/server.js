@@ -1,6 +1,15 @@
 // server/server.js
 require("dotenv").config();
 
+// Crash visibility
+process.on("uncaughtException", (err) => {
+  console.error("UNCAUGHT EXCEPTION:", err);
+});
+process.on("unhandledRejection", (reason, p) => {
+  console.error("UNHANDLED REJECTION at:", p, "reason:", reason);
+});
+
+// Deferred env log
 setImmediate(() => {
   console.log("ENV status:", {
     SUPABASE_URL: !!process.env.SUPABASE_URL,
@@ -8,6 +17,8 @@ setImmediate(() => {
     OPENAI_KEY: !!process.env.OPENAI_KEY,
     ADMIN_SECRET: !!process.env.ADMIN_SECRET,
     BOT_TOKEN: !!process.env.BOT_TOKEN,
+    PUBLIC_BASE_URL: !!process.env.PUBLIC_BASE_URL,
+    APP_URL: !!process.env.APP_URL,
     PORT: process.env.PORT,
   });
 });
@@ -15,19 +26,19 @@ setImmediate(() => {
 const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
-const fetch = require("node-fetch"); // if node v18+ you can use global fetch, otherwise install node-fetch
+const fetch = global.fetch || require("node-fetch");
 const { createClient } = require("@supabase/supabase-js");
 const OpenAI = require("openai");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const prompts = require("./prompts"); // your prompt builders: e.g., prompts.trade_setup = (msg, imageDesc) => [...]
+const prompts = require("./prompts"); // you must ensure this file exports functions for topics
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-// expose uploads so images can be fetched
+// static uploads
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Supabase client
@@ -58,7 +69,7 @@ async function sendTelegramMessage(chatId, text, options = {}) {
   }
 }
 
-// Storage for images (local)
+// Image upload storage
 const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 const upload = multer({ dest: uploadDir });
@@ -99,7 +110,7 @@ async function getUser(userId) {
   return upserted;
 }
 
-// Rate limit / package logic
+// Rate limit logic
 async function checkAndIncrement(userId) {
   const user = await getUser(userId);
   const now = new Date();
@@ -140,9 +151,28 @@ async function checkAndIncrement(userId) {
   return { allowed: true, limit };
 }
 
-// Health
+// Sanitize reply to remove unwanted AI disclaimers
+function sanitizeReply(text) {
+  if (!text) return text;
+  const lines = text
+    .split("\n")
+    .filter(
+      (l) =>
+        !/As an AI/i.test(l) &&
+        !/I('?| cannot| can’t) (assist with|view|see) images?/.test(l)
+    );
+  return lines.join("\n").trim();
+}
+
+// Health route
 app.get("/health", (req, res) => {
   res.json({ status: "ok", time: new Date().toISOString() });
+});
+
+// Echo for debugging
+app.post("/api/test-echo", (req, res) => {
+  console.log("ECHO", req.body);
+  res.json({ received: req.body });
 });
 
 // Get user status
@@ -214,7 +244,6 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
   const file = req.file;
   if (!userId || !file)
     return res.status(400).json({ error: "Missing userId or image" });
-
   try {
     await supabase.from("images").insert({
       user_id: userId,
@@ -233,9 +262,11 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
   }
 });
 
-// Chat endpoint (handles imageFilename)
+// Chat endpoint
 app.post("/api/chat", async (req, res) => {
   const { userId, topic, message, imageFilename } = req.body;
+  console.log("Incoming /api/chat", { userId, topic, message, imageFilename });
+
   if (!userId || !topic || !message)
     return res.status(400).json({ error: "Missing required fields" });
 
@@ -256,19 +287,19 @@ app.post("/api/chat", async (req, res) => {
       }
     }
 
-    const { allowed, limit } = await checkAndIncrement(userId);
-    if (!allowed) {
-      return res.status(429).json({ error: "Request limit reached", limit });
+    const rateCheck = await checkAndIncrement(userId);
+    if (!rateCheck.allowed) {
+      return res.status(429).json({ error: "Request limit reached", limit: rateCheck.limit });
     }
 
-    const promptBuilder = prompts[topic];
-    if (!promptBuilder)
+    if (!prompts[topic]) {
       return res.status(400).json({ error: "Unknown topic" });
+    }
 
-    // Build base prompt messages
-    let messages = promptBuilder(message, "");
+    // Build prompt sequence
+    let messages = prompts[topic](message, imageFilename ? `${process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`}/uploads/${imageFilename}` : "");
 
-    // If image provided, prepend a user message with image URL context
+    // Prepend image context if present
     if (imageFilename) {
       const base =
         process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`;
@@ -278,32 +309,55 @@ app.post("/api/chat", async (req, res) => {
         content: `Here is the screenshot for the ${topic.replace(
           "_",
           " "
-        )} request: ${imageUrl}\nPlease only answer the specific topic and analyze the chart/image accordingly.`,
+        )} request: ${imageUrl}\nPlease only answer the specific topic and analyze the chart/image accordingly. Focus on risk management, structure, and psychology; do not give direct financial advice.`,
       });
     }
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages,
-    });
+    // Choose model (vision if image and available)
+    let model = process.env.OPENAI_MODEL || "gpt-4";
+    if (imageFilename && process.env.VISION_MODEL) {
+      model = process.env.VISION_MODEL;
+    }
+    console.log("Using model:", model);
 
-    const reply = completion.choices?.[0]?.message?.content;
-    if (!reply) return res.status(500).json({ error: "No reply from OpenAI" });
+    // Call OpenAI with timeout
+    const timeoutMs = 20000;
+    let completion;
+    try {
+      completion = await Promise.race([
+        openai.chat.completions.create({
+          model,
+          messages,
+          temperature: 0.3,
+        }),
+        new Promise((_, reject) =>
+          setTimeout(() => reject(new Error("OpenAI request timed out")), timeoutMs)
+        ),
+      ]);
+    } catch (err) {
+      console.error("OpenAI request error/timeout:", err);
+      return res.status(500).json({ error: err.message || "OpenAI failure" });
+    }
 
-    res.json({ reply });
+    let reply = completion.choices?.[0]?.message?.content || "";
+    reply = sanitizeReply(reply);
+    if (reply.length > 4000) {
+      reply = reply.slice(0, 4000) + "\n\n*(response truncated for stability)*";
+    }
+    console.log("Reply generated (preview):", reply.slice(0, 200));
+
+    return res.json({ reply });
   } catch (err) {
     console.error("POST /api/chat error:", err);
-    res.status(500).json({ error: err?.message || "Chat processing failed" });
+    return res.status(500).json({ error: err?.message || "Chat processing failed" });
   }
 });
 
-// Submit payment (user)
+// Submit payment
 app.post("/api/submit-payment", async (req, res) => {
   const { userId, package: pkg, txid } = req.body;
   if (!userId || !pkg || !txid)
-    return res
-      .status(400)
-      .json({ error: "userId, package, and txid required" });
+    return res.status(400).json({ error: "userId, package, and txid required" });
 
   try {
     const { error } = await supabase.from("pending_payments").insert({
@@ -312,21 +366,16 @@ app.post("/api/submit-payment", async (req, res) => {
       txid,
       status: "pending",
     });
-
     if (error) {
-      console.error("Insert pending payment error:", error);
-      return res
-        .status(500)
-        .json({ error: "Failed to store pending payment" });
+      console.error("pending payment insert error:", error);
+      return res.status(500).json({ error: "Failed to store pending payment" });
     }
 
-    // Notify user of submission
     await sendTelegramMessage(
       userId,
       `✅ Payment submission received for *${pkg}* plan.\nTXID: \`${txid}\`\nOur team will review and activate shortly.`,
       { parse_mode: "Markdown" }
     );
-
     res.json({
       success: true,
       message: "Payment submitted, awaiting manual verification.",
@@ -337,11 +386,10 @@ app.post("/api/submit-payment", async (req, res) => {
   }
 });
 
-// Get latest pending payment for a user
+// Get latest pending payment
 app.get("/api/pending-payment", async (req, res) => {
   const { userId } = req.query;
   if (!userId) return res.status(400).json({ error: "userId required" });
-
   try {
     const { data, error } = await supabase
       .from("pending_payments")
@@ -350,7 +398,6 @@ app.get("/api/pending-payment", async (req, res) => {
       .order("created_at", { ascending: false })
       .limit(1)
       .single();
-
     if (error && error.code !== "PGRST116") {
       console.warn("pending-payment fetch warning:", error);
     }
@@ -372,12 +419,10 @@ app.get("/api/admin/pending-payments", async (req, res) => {
       .from("pending_payments")
       .select("*")
       .order("created_at", { ascending: false });
-
     if (error) {
       console.error("GET pending-payments error:", error);
       return res.status(500).json({ error: "Failed to fetch pending payments" });
     }
-
     res.json(data);
   } catch (e) {
     console.error("GET /api/admin/pending-payments error:", e);
@@ -385,7 +430,7 @@ app.get("/api/admin/pending-payments", async (req, res) => {
   }
 });
 
-// Admin: approve payment
+// Admin: approve payment (robust against duplicates)
 app.post("/api/admin/approve-payment", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
   if (secret !== process.env.ADMIN_SECRET)
@@ -395,20 +440,28 @@ app.post("/api/admin/approve-payment", async (req, res) => {
   if (!txid) return res.status(400).json({ error: "txid required" });
 
   try {
-    const { data: pending, error: fetchErr } = await supabase
+    // get latest pending for that txid
+    const { data: pendings, error: fetchErr } = await supabase
       .from("pending_payments")
       .select("*")
       .eq("txid", txid)
-      .single();
+      .eq("status", "pending")
+      .order("created_at", { ascending: false })
+      .limit(1);
 
-    if (fetchErr || !pending) {
+    if (fetchErr) {
+      console.error("fetch pending error:", fetchErr);
+      return res.status(500).json({ error: "Lookup failed" });
+    }
+    if (!pendings || pendings.length === 0) {
       return res.status(404).json({ error: "Pending payment not found" });
     }
 
+    const pending = pendings[0];
     const userId = pending.user_id;
     const pkg = pending.package;
 
-    // Activate user
+    // activate user
     await supabase.from("users").upsert({
       id: userId,
       package: pkg,
@@ -416,7 +469,7 @@ app.post("/api/admin/approve-payment", async (req, res) => {
       last_request_reset: new Date().toISOString(),
     });
 
-    // Update pending payment
+    // update pending record
     await supabase
       .from("pending_payments")
       .update({
@@ -424,9 +477,9 @@ app.post("/api/admin/approve-payment", async (req, res) => {
         verified_at: new Date().toISOString(),
         admin_notes: admin_notes || "Manually approved",
       })
-      .eq("txid", txid);
+      .eq("id", pending.id);
 
-    // Notify user
+    // notify user
     await sendTelegramMessage(
       userId,
       `🎉 Your *${pkg}* plan has been activated. You now have access.`,
