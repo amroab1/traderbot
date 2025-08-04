@@ -15,16 +15,20 @@ setImmediate(() => {
 const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
+const fetch = require("node-fetch"); // if node v18+ you can use global fetch, otherwise install node-fetch
 const { createClient } = require("@supabase/supabase-js");
 const OpenAI = require("openai");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const prompts = require("./prompts");
+const prompts = require("./prompts"); // your prompt builders: e.g., prompts.trade_setup = (msg, imageDesc) => [...]
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
+
+// expose uploads so images can be fetched
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Supabase client
 const supabase = createClient(
@@ -47,16 +51,14 @@ async function sendTelegramMessage(chatId, text, options = {}) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
     });
-    const data = await resp.json();
-    if (!data.ok) {
-      console.warn("Telegram sendMessage failed:", data);
-    }
+    const j = await resp.json();
+    if (!j.ok) console.warn("Telegram send failed:", j);
   } catch (e) {
-    console.error("Telegram sendMessage error:", e);
+    console.error("Telegram send error:", e);
   }
 }
 
-// Storage for uploads
+// Storage for images (local)
 const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 const upload = multer({ dest: uploadDir });
@@ -138,7 +140,7 @@ async function checkAndIncrement(userId) {
   return { allowed: true, limit };
 }
 
-// Health check
+// Health
 app.get("/health", (req, res) => {
   res.json({ status: "ok", time: new Date().toISOString() });
 });
@@ -219,16 +221,21 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
       file_path: file.filename,
       uploaded_at: new Date().toISOString(),
     });
-    res.json({ success: true, filename: file.filename });
+
+    const base =
+      process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`;
+    const fileUrl = `${base}/uploads/${file.filename}`;
+
+    res.json({ success: true, filename: file.filename, url: fileUrl });
   } catch (e) {
     console.error("POST /api/upload error:", e);
     res.status(500).json({ error: "Image upload failed" });
   }
 });
 
-// Chat endpoint
+// Chat endpoint (handles imageFilename)
 app.post("/api/chat", async (req, res) => {
-  const { userId, topic, message, imageDescription } = req.body;
+  const { userId, topic, message, imageFilename } = req.body;
   if (!userId || !topic || !message)
     return res.status(400).json({ error: "Missing required fields" });
 
@@ -258,7 +265,22 @@ app.post("/api/chat", async (req, res) => {
     if (!promptBuilder)
       return res.status(400).json({ error: "Unknown topic" });
 
-    const messages = promptBuilder(message, imageDescription || "");
+    // Build base prompt messages
+    let messages = promptBuilder(message, "");
+
+    // If image provided, prepend a user message with image URL context
+    if (imageFilename) {
+      const base =
+        process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`;
+      const imageUrl = `${base}/uploads/${imageFilename}`;
+      messages.unshift({
+        role: "user",
+        content: `Here is the screenshot for the ${topic.replace(
+          "_",
+          " "
+        )} request: ${imageUrl}\nPlease only answer the specific topic and analyze the chart/image accordingly.`,
+      });
+    }
 
     const completion = await openai.chat.completions.create({
       model: "gpt-4",
@@ -266,9 +288,7 @@ app.post("/api/chat", async (req, res) => {
     });
 
     const reply = completion.choices?.[0]?.message?.content;
-    if (!reply) {
-      return res.status(500).json({ error: "No reply from OpenAI" });
-    }
+    if (!reply) return res.status(500).json({ error: "No reply from OpenAI" });
 
     res.json({ reply });
   } catch (err) {
@@ -332,7 +352,6 @@ app.get("/api/pending-payment", async (req, res) => {
       .single();
 
     if (error && error.code !== "PGRST116") {
-      // PGRST116 might be no rows? handle gracefully
       console.warn("pending-payment fetch warning:", error);
     }
     res.json(data || {});
@@ -397,7 +416,7 @@ app.post("/api/admin/approve-payment", async (req, res) => {
       last_request_reset: new Date().toISOString(),
     });
 
-    // Update pending payment row
+    // Update pending payment
     await supabase
       .from("pending_payments")
       .update({
@@ -407,7 +426,7 @@ app.post("/api/admin/approve-payment", async (req, res) => {
       })
       .eq("txid", txid);
 
-    // Notify user of activation
+    // Notify user
     await sendTelegramMessage(
       userId,
       `🎉 Your *${pkg}* plan has been activated. You now have access.`,

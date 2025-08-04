@@ -1,6 +1,6 @@
 // app/src/screens/Chat.jsx
 import React, { useState, useEffect, useRef } from "react";
-import { chat, uploadImage } from "../api.js"; // ensure these are exported
+import { chat, uploadImage } from "../api.js";
 
 const topicTitles = {
   trade_setup: "Trade Setup Review",
@@ -9,6 +9,8 @@ const topicTitles = {
   funded_account: "Funded Account Advice",
   margin_call: "Margin Call Emergency",
 };
+
+const STORAGE_KEY = (userId, topic) => `chat_history_${userId}_${topic}`;
 
 export default function Chat({
   userId,
@@ -19,7 +21,7 @@ export default function Chat({
   onStatusRefresh,
 }) {
   const [input, setInput] = useState("");
-  const [history, setHistory] = useState([]); // { role: "user"|"ai", text, image? }
+  const [history, setHistory] = useState([]); // { role, text, image }
   const [image, setImage] = useState(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
@@ -27,7 +29,29 @@ export default function Chat({
   const [usageInfo, setUsageInfo] = useState(null);
   const [isWarmed, setIsWarmed] = useState(false);
 
-  // Pre-warm user row so first chat doesn't race
+  // Load persisted history
+  useEffect(() => {
+    if (userId && topic) {
+      const stored = localStorage.getItem(STORAGE_KEY(userId, topic));
+      if (stored) {
+        try {
+          setHistory(JSON.parse(stored));
+        } catch {}
+      }
+    }
+  }, [userId, topic]);
+
+  // Persist history when changes
+  useEffect(() => {
+    if (userId && topic) {
+      localStorage.setItem(
+        STORAGE_KEY(userId, topic),
+        JSON.stringify(history)
+      );
+    }
+  }, [history, userId, topic]);
+
+  // Pre-warm user row
   useEffect(() => {
     if (!userId) return;
     (async () => {
@@ -45,12 +69,12 @@ export default function Chat({
     })();
   }, [userId]);
 
-  // refresh parent status if provided
+  // Refresh parent status
   useEffect(() => {
     if (onStatusRefresh) onStatusRefresh();
   }, []);
 
-  // scroll to bottom when history updates
+  // Scroll on history change
   useEffect(() => {
     scrollRef.current?.scrollTo({
       top: scrollRef.current?.scrollHeight,
@@ -58,7 +82,7 @@ export default function Chat({
     });
   }, [history]);
 
-  // compute usage info
+  // Usage info
   useEffect(() => {
     if (status) {
       const limits = {
@@ -90,7 +114,6 @@ export default function Chat({
     setSending(true);
 
     const userMessage = input.trim();
-    // optimistic user bubble
     setHistory((h) => [
       ...h,
       {
@@ -101,7 +124,7 @@ export default function Chat({
     ]);
     setInput("");
 
-    let imageDescription = "";
+    let imageFilename = "";
 
     const doChatRequest = async () => {
       if (image) {
@@ -110,7 +133,7 @@ export default function Chat({
         form.append("userId", userId);
         try {
           const up = await uploadImage(form);
-          imageDescription = `Uploaded image filename: ${up.data.filename}`;
+          imageFilename = up.data.filename || "";
         } catch (e) {
           console.warn("Image upload failed:", e);
         }
@@ -121,7 +144,7 @@ export default function Chat({
           userId,
           topic,
           message: userMessage || "(image only)",
-          imageDescription,
+          imageFilename,
         });
 
         if (res.data?.reply) {
@@ -131,7 +154,7 @@ export default function Chat({
         if (res.data?.error) {
           throw new Error(res.data.error);
         }
-        throw new Error("Unknown response from server");
+        throw new Error("Unknown response");
       } catch (err) {
         throw err;
       }
@@ -440,9 +463,7 @@ export default function Chat({
           <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
             <button
               onClick={handleSend}
-              disabled={
-                sending || ((!input.trim() && !image) || !isWarmed)
-              }
+              disabled={sending || ((!input.trim() && !image) || !isWarmed)}
               style={{
                 background: "#6c63ff",
                 border: "none",
@@ -454,14 +475,9 @@ export default function Chat({
                 color: "#fff",
                 minWidth: 100,
                 opacity: sending ? 0.8 : 1,
-                position: "relative",
               }}
             >
-              {sending
-                ? "Sending..."
-                : !isWarmed
-                ? "Preparing..."
-                : "Send"}
+              {sending ? "Sending..." : !isWarmed ? "Preparing..." : "Send"}
             </button>
           </div>
         </div>
