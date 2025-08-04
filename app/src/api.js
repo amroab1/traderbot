@@ -3,6 +3,7 @@ import axios from "axios";
 
 const API_BASE =
   import.meta.env.VITE_API_URL || "https://server-production-dd28.up.railway.app";
+  import { chat, uploadImage, getUser, API_BASE } from "../api";
 
 export const getUser = (userId) => axios.get(`${API_BASE}/api/user/${userId}`);
 export const startTrial = (userId) =>

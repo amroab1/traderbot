@@ -1,6 +1,6 @@
 // app/src/screens/Chat.jsx
 import React, { useState, useEffect, useRef } from "react";
-import { chat, uploadImage } from "../api.js";
+import { chat, uploadImage, API_BASE } from "../api.js";
 
 const topicTitles = {
   trade_setup: "Trade Setup Review",
@@ -25,11 +25,11 @@ export default function Chat({
   const [image, setImage] = useState(null);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
-  const scrollRef = useRef(null);
   const [usageInfo, setUsageInfo] = useState(null);
   const [isWarmed, setIsWarmed] = useState(false);
+  const scrollRef = useRef(null);
 
-  // load stored
+  // 1) Load stored history
   useEffect(() => {
     if (userId && topic) {
       const stored = localStorage.getItem(STORAGE_KEY(userId, topic));
@@ -41,109 +41,126 @@ export default function Chat({
     }
   }, [userId, topic]);
 
+  // 2) Persist history
   useEffect(() => {
     if (userId && topic) {
-      localStorage.setItem(STORAGE_KEY(userId, topic), JSON.stringify(history));
+      localStorage.setItem(
+        STORAGE_KEY(userId, topic),
+        JSON.stringify(history)
+      );
     }
   }, [history, userId, topic]);
 
-  // pre-warm user
+  // 3) Pre-warm user endpoint
   useEffect(() => {
     if (!userId) return;
     (async () => {
       try {
-        await fetch(
-          `${import.meta.env.VITE_API_URL || "https://server-production-dd28.up.railway.app"}/api/user/${encodeURIComponent(
-            userId
-          )}`
-        );
+        await fetch(`${API_BASE}/api/user/${encodeURIComponent(userId)}`);
       } catch (e) {
-        console.warn("Pre-warm user failed:", e);
+        console.warn("Pre-warm failed:", e);
       } finally {
         setIsWarmed(true);
       }
     })();
   }, [userId]);
 
+  // 4) Poll conversation endpoint every 5s
+  useEffect(() => {
+    if (!userId || !topic) return;
+    const loadConv = async () => {
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/conversation?userId=${encodeURIComponent(
+            userId
+          )}&topic=${encodeURIComponent(topic)}`
+        );
+        if (!res.ok) throw new Error("Failed to fetch conversation");
+        const { messages } = await res.json();
+        const mapped = messages.map((m) => ({
+          role: m.role,
+          text: m.content,
+          image: m.image_url || null,
+        }));
+        setHistory(mapped);
+      } catch (e) {
+        console.warn("Conversation load error:", e);
+      }
+    };
+    loadConv();
+    const iv = setInterval(loadConv, 5000);
+    return () => clearInterval(iv);
+  }, [userId, topic]);
+
+  // 5) Status refresh
   useEffect(() => {
     if (onStatusRefresh) onStatusRefresh();
   }, []);
 
+  // 6) Usage info
   useEffect(() => {
-    if (status) {
-      const limits = {
-        trial: parseInt(import.meta.env.VITE_STARTER_WEEKLY_LIMIT || "5", 10),
-        Starter: parseInt(import.meta.env.VITE_STARTER_WEEKLY_LIMIT || "5", 10),
-        Pro: parseInt(import.meta.env.VITE_PRO_WEEKLY_LIMIT || "10", 10),
-        Elite: Infinity,
-      };
-      const limit = limits[status.package] ?? 0;
-      setUsageInfo({
-        used: status.requestsWeek,
-        limit,
-      });
-      if (limit !== Infinity && status.requestsWeek >= limit && onLimitExceeded) {
-        onLimitExceeded();
-      }
+    if (!status) return;
+    const limits = {
+      trial: parseInt(import.meta.env.VITE_STARTER_WEEKLY_LIMIT || "5", 10),
+      Starter: parseInt(import.meta.env.VITE_STARTER_WEEKLY_LIMIT || "5", 10),
+      Pro: parseInt(import.meta.env.VITE_PRO_WEEKLY_LIMIT || "10", 10),
+      Elite: Infinity,
+    };
+    const limit = limits[status.package] ?? 0;
+    setUsageInfo({ used: status.requestsWeek, limit });
+    if (limit !== Infinity && status.requestsWeek >= limit && onLimitExceeded) {
+      onLimitExceeded();
     }
   }, [status]);
 
+  // 7) Auto-scroll
   useEffect(() => {
     scrollRef.current?.scrollTo({
-      top: scrollRef.current?.scrollHeight,
+      top: scrollRef.current.scrollHeight,
       behavior: "smooth",
     });
   }, [history]);
 
+  // Attach handler
   const handleAttach = (e) => {
     if (e.target.files && e.target.files[0]) {
       setImage(e.target.files[0]);
     }
   };
 
+  // Send handler with retry, then rely on poll for AI/admin
   const handleSend = async () => {
     if (!input.trim() && !image) return;
     setError(null);
     setSending(true);
 
-    const userMessage = input.trim();
+    const userMessage = input.trim() || "(image only)";
     setHistory((h) => [
       ...h,
       {
         role: "user",
-        text: userMessage || "(image only)",
+        text: userMessage,
         image: image ? URL.createObjectURL(image) : null,
       },
     ]);
     setInput("");
 
     let imageFilename = "";
-
     const doChatRequest = async () => {
       if (image) {
         const form = new FormData();
         form.append("image", image);
         form.append("userId", userId);
-        try {
-          const up = await uploadImage(form);
-          imageFilename = up.data.filename || "";
-        } catch (e) {
-          console.warn("Image upload failed:", e);
-        }
+        const up = await uploadImage(form);
+        imageFilename = up.data.filename || "";
       }
-
       const res = await chat({
         userId,
         topic,
-        message: userMessage || "(image only)",
+        message: userMessage,
         imageFilename,
       });
-
-      if (res.data?.reply) {
-        setHistory((h) => [...h, { role: "ai", text: res.data.reply }]);
-      } else if (res.data?.error) {
-        throw new Error(res.data.error);
-      }
+      if (res.data?.error) throw new Error(res.data.error);
     };
 
     try {
@@ -470,21 +487,9 @@ export default function Chat({
 
         <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
           {status?.package} plan • Used {status?.requestsWeek} /{" "}
-          {status?.package === "Elite" ? "∞" : usageInfoText(status)}
+          {status?.package === "Elite" ? "∞" : `${usageInfo?.used} / ${usageInfo?.limit}`}
         </div>
       </div>
     </div>
   );
-}
-
-function usageInfoText(status) {
-  if (!status) return "";
-  const limits = {
-    trial: parseInt(import.meta.env.VITE_STARTER_WEEKLY_LIMIT || "5", 10),
-    Starter: parseInt(import.meta.env.VITE_STARTER_WEEKLY_LIMIT || "5", 10),
-    Pro: parseInt(import.meta.env.VITE_PRO_WEEKLY_LIMIT || "10", 10),
-    Elite: Infinity,
-  };
-  const limit = limits[status.package] ?? 0;
-  return limit === Infinity ? `${status.requestsWeek} / ∞` : `${status.requestsWeek} / ${limit}`;
 }
