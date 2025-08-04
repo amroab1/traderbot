@@ -1,6 +1,6 @@
 // app/src/screens/Chat.jsx
 import React, { useState, useEffect, useRef } from "react";
-import { chat, uploadImage, API_BASE } from "../api.js";
+import { chat, uploadImage, API_BASE, fetchConversation } from "../api.js";
 
 const topicTitles = {
   trade_setup: "Trade Setup Review",
@@ -29,7 +29,7 @@ export default function Chat({
   const [isWarmed, setIsWarmed] = useState(false);
   const scrollRef = useRef(null);
 
-  // 1) Load stored history
+  // 1) Load from localStorage
   useEffect(() => {
     if (userId && topic) {
       const stored = localStorage.getItem(STORAGE_KEY(userId, topic));
@@ -41,7 +41,7 @@ export default function Chat({
     }
   }, [userId, topic]);
 
-  // 2) Persist history
+  // 2) Persist to localStorage
   useEffect(() => {
     if (userId && topic) {
       localStorage.setItem(
@@ -51,7 +51,7 @@ export default function Chat({
     }
   }, [history, userId, topic]);
 
-  // 3) Pre-warm user endpoint
+  // 3) Pre-warm the user
   useEffect(() => {
     if (!userId) return;
     (async () => {
@@ -65,18 +65,13 @@ export default function Chat({
     })();
   }, [userId]);
 
-  // 4) Poll conversation endpoint every 5s
+  // 4) Poll conversation
   useEffect(() => {
     if (!userId || !topic) return;
     const loadConv = async () => {
       try {
-        const res = await fetch(
-          `${API_BASE}/api/conversation?userId=${encodeURIComponent(
-            userId
-          )}&topic=${encodeURIComponent(topic)}`
-        );
-        if (!res.ok) throw new Error("Failed to fetch conversation");
-        const { messages } = await res.json();
+        const res = await fetchConversation(userId, topic);
+        const messages = res.data.messages;
         const mapped = messages.map((m) => ({
           role: m.role,
           text: m.content,
@@ -121,14 +116,14 @@ export default function Chat({
     });
   }, [history]);
 
-  // Attach handler
+  // File attach
   const handleAttach = (e) => {
     if (e.target.files && e.target.files[0]) {
       setImage(e.target.files[0]);
     }
   };
 
-  // Send handler with retry, then rely on poll for AI/admin
+  // Send message + retry, then rely on poll to get both AI & admin replies
   const handleSend = async () => {
     if (!input.trim() && !image) return;
     setError(null);
