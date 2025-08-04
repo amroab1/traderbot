@@ -33,13 +33,13 @@ app.use(
 );
 app.use(bodyParser.json());
 
-// Supabase
+// Supabase client
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// OpenAI
+// OpenAI client
 const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
 
 // Telegram helper
@@ -62,12 +62,12 @@ async function sendTelegramMessage(chatId, text, options = {}) {
   }
 }
 
-// Uploads folder
+// Ensure uploads folder exists
 const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 const upload = multer({ dest: uploadDir });
 
-// Helpers: get/create user, rate limit
+// Helper: get or create user
 async function getUser(userId) {
   const { data, error, status } = await supabase
     .from("users")
@@ -95,14 +95,15 @@ async function getUser(userId) {
   return upserted;
 }
 
+// Helper: enforce weekly rate limit
 async function checkAndIncrement(userId) {
   const user = await getUser(userId);
-  const now = new Date(),
-    lastReset = new Date(user.last_request_reset);
+  const now = Date.now();
+  const lastReset = new Date(user.last_request_reset).getTime();
   if (now - lastReset > 7 * 24 * 60 * 60 * 1000) {
     await supabase
       .from("users")
-      .update({ requests_week: 0, last_request_reset: now.toISOString() })
+      .update({ requests_week: 0, last_request_reset: new Date().toISOString() })
       .eq("id", userId);
     user.requests_week = 0;
   }
@@ -131,20 +132,22 @@ async function checkAndIncrement(userId) {
 
 // --- Public endpoints ---
 
+// Health check
 app.get("/health", (_, res) =>
   res.json({ status: "ok", time: new Date().toISOString() })
 );
 
+// Get user status
 app.get("/api/user/:id", async (req, res) => {
   try {
     const user = await getUser(req.params.id);
-    const now = new Date(),
-      trialStart = new Date(user.trial_start),
-      elapsed = (now - trialStart) / 36e5,
-      trialActive =
-        user.package === "trial" &&
-        elapsed < +process.env.TRIAL_DURATION_HOURS || 24,
-      expired = user.package === "trial" && !trialActive;
+    const now = Date.now();
+    const start = new Date(user.trial_start).getTime();
+    const elapsedHrs = (now - start) / 36e5;
+    const trialActive =
+      user.package === "trial" &&
+      elapsedHrs < +process.env.TRIAL_DURATION_HOURS || 24;
+    const expired = user.package === "trial" && !trialActive;
     res.json({
       trialActive,
       expired,
@@ -157,6 +160,7 @@ app.get("/api/user/:id", async (req, res) => {
   }
 });
 
+// Start trial
 app.post("/api/start-trial", async (req, res) => {
   const { userId } = req.body;
   if (!userId) return res.status(400).json({ error: "Missing userId" });
@@ -171,6 +175,7 @@ app.post("/api/start-trial", async (req, res) => {
   res.json({ success: true });
 });
 
+// Manual activation
 app.post("/api/activate", async (req, res) => {
   const { userId, package: pkg } = req.body;
   if (!userId || !pkg)
@@ -184,9 +189,10 @@ app.post("/api/activate", async (req, res) => {
   res.json({ success: true });
 });
 
+// Upload image
 app.post("/api/upload", upload.single("image"), async (req, res) => {
-  const { userId } = req.body,
-    file = req.file;
+  const { userId } = req.body;
+  const file = req.file;
   if (!userId || !file)
     return res.status(400).json({ error: "Missing userId or image" });
   await supabase.from("images").insert({
@@ -197,25 +203,24 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
   res.json({ success: true, filename: file.filename });
 });
 
-// Main chat
+// Main chat endpoint
 app.post("/api/chat", async (req, res) => {
   const { userId, topic, message, imageDescription } = req.body;
   if (!userId || !topic || !message)
     return res.status(400).json({ error: "Missing fields" });
   try {
     const userRow = await getUser(userId);
-    // expire trial
+    // expire trial if needed
     if (userRow.package === "trial") {
-      const now = Date.now(),
-        start = new Date(userRow.trial_start).getTime(),
-        limitMs = (+process.env.TRIAL_DURATION_HOURS || 24) * 36e5;
-      if (now - start > limitMs)
+      const start = new Date(userRow.trial_start).getTime();
+      const limitMs = (+process.env.TRIAL_DURATION_HOURS || 24) * 36e5;
+      if (Date.now() - start > limitMs)
         return res.status(403).json({ error: "Trial expired" });
     }
     const { allowed } = await checkAndIncrement(userId);
     if (!allowed) return res.status(429).json({ error: "Rate limit" });
 
-    // conversation storage
+    // fetch or create conversation
     const { data: convs } = await supabase
       .from("conversations")
       .select("*")
@@ -232,6 +237,7 @@ app.post("/api/chat", async (req, res) => {
         .single();
       conversation = nc;
     }
+
     // store user message
     await supabase.from("messages").insert({
       conversation_id: conversation.id,
@@ -240,20 +246,22 @@ app.post("/api/chat", async (req, res) => {
       image_url: null,
     });
 
-    // run AI
-    const systemPrompt = prompts[topic]?.(message, imageDescription || "");
+    // generate AI reply
+    const messages = prompts[topic]?.(message, imageDescription || "");
     const completion = await openai.chat.completions.create({
       model: "gpt-4",
-      messages: systemPrompt,
+      messages,
     });
     const reply = completion.choices[0].message.content;
-    // store AI
+
+    // store AI reply
     await supabase.from("messages").insert({
       conversation_id: conversation.id,
       role: "ai",
       content: reply,
       image_url: null,
     });
+
     res.json({ reply });
   } catch (e) {
     console.error(e);
@@ -261,12 +269,13 @@ app.post("/api/chat", async (req, res) => {
   }
 });
 
-// --- New: expose conversation to user-side ---
+// --- Expose conversation for user-side polling ---
 app.get("/api/conversation", async (req, res) => {
   const { userId, topic } = req.query;
   if (!userId || !topic)
     return res.status(400).json({ error: "userId and topic required" });
   try {
+    // fetch or create conversation
     const { data: convs } = await supabase
       .from("conversations")
       .select("*")
@@ -283,11 +292,14 @@ app.get("/api/conversation", async (req, res) => {
         .single();
       conversation = nc;
     }
+
+    // fetch all messages
     const { data: messages } = await supabase
       .from("messages")
       .select("*")
       .eq("conversation_id", conversation.id)
       .order("created_at", { ascending: true });
+
     res.json({ conversation, messages });
   } catch (e) {
     console.error(e);
@@ -295,16 +307,85 @@ app.get("/api/conversation", async (req, res) => {
   }
 });
 
-// Admin: respond (already in your flow)
+// --- Admin-only endpoints ---
+
+// List pending payments
+app.get("/api/admin/pending-payments", async (req, res) => {
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== process.env.ADMIN_SECRET)
+    return res.status(403).json({ error: "Forbidden" });
+
+  try {
+    const { data, error } = await supabase
+      .from("pending_payments")
+      .select("*")
+      .order("created_at", { ascending: false });
+    if (error)
+      return res
+        .status(500)
+        .json({ error: "Failed to fetch pending payments" });
+    res.json(data);
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Internal error" });
+  }
+});
+
+// Admin fetch conversation (same as user version, but protected)
+app.get("/api/admin/conversation", async (req, res) => {
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== process.env.ADMIN_SECRET)
+    return res.status(403).json({ error: "Forbidden" });
+
+  const { userId, topic } = req.query;
+  if (!userId || !topic)
+    return res.status(400).json({ error: "userId and topic required" });
+
+  try {
+    // fetch or create conversation
+    const { data: convs } = await supabase
+      .from("conversations")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("topic", topic)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    let conversation = convs?.[0];
+    if (!conversation) {
+      const { data: nc } = await supabase
+        .from("conversations")
+        .insert({ user_id: userId, topic })
+        .select()
+        .single();
+      conversation = nc;
+    }
+
+    // fetch all messages
+    const { data: messages } = await supabase
+      .from("messages")
+      .select("*")
+      .eq("conversation_id", conversation.id)
+      .order("created_at", { ascending: true });
+
+    res.json({ conversation, messages });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Internal error" });
+  }
+});
+
+// Admin respond & notify user
 app.post("/api/admin/respond", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
   if (secret !== process.env.ADMIN_SECRET)
     return res.status(403).json({ error: "Forbidden" });
+
   const { userId, topic, reply, markFinal } = req.body;
   if (!userId || !topic || !reply)
     return res.status(400).json({ error: "Missing fields" });
+
   try {
-    // get conversation
+    // fetch or create conversation
     const { data: convs } = await supabase
       .from("conversations")
       .select("*")
@@ -321,6 +402,7 @@ app.post("/api/admin/respond", async (req, res) => {
         .single();
       conv = nc;
     }
+
     // store admin message
     await supabase.from("messages").insert({
       conversation_id: conv.id,
@@ -328,12 +410,14 @@ app.post("/api/admin/respond", async (req, res) => {
       content: reply,
       is_final: !!markFinal,
     });
-    // notify Telegram user
+
+    // notify via Telegram
     await sendTelegramMessage(
       userId,
       `✉️ *Support Reply*\n\n${reply}`,
       { parse_mode: "Markdown" }
     );
+
     res.json({ success: true });
   } catch (e) {
     console.error(e);
