@@ -1,67 +1,116 @@
-import React, { useState } from "react";
-import { chat, uploadImage } from "../api.js";
+// app/src/screens/Chat.jsx
+import React, { useState, useEffect, useRef } from "react";
+import { chat, uploadImage, getUser } from "../api.js"; // adjust if getUser isn't exported
 
-const userAvatar = "🧑"; // you can replace with image URL
-const aiAvatar = "🤖";
+const topicTitles = {
+  trade_setup: "Trade Setup Review",
+  account_health: "Account Health Check",
+  psychology: "Psychology Support",
+  funded_account: "Funded Account Advice",
+  margin_call: "Margin Call Emergency",
+};
 
 export default function Chat({
   userId,
   topic,
   onBack,
-  onLimitExceeded,
   status,
+  onLimitExceeded,
   onStatusRefresh,
 }) {
   const [input, setInput] = useState("");
-  const [history, setHistory] = useState([]);
+  const [history, setHistory] = useState([]); // { role: "user"|"ai", text, image? }
   const [image, setImage] = useState(null);
-  const [loading, setLoading] = useState(false);
+  const [sending, setSending] = useState(false);
   const [error, setError] = useState(null);
+  const scrollRef = useRef(null);
+  const [usageInfo, setUsageInfo] = useState(null);
 
-  const send = async () => {
+  // fetch latest status if needed
+  useEffect(() => {
+    if (onStatusRefresh) onStatusRefresh();
+  }, []);
+
+  // scroll to bottom when history changes
+  useEffect(() => {
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: "smooth",
+    });
+  }, [history]);
+
+  const handleSend = async () => {
     if (!input.trim() && !image) return;
-    setLoading(true);
     setError(null);
-    let imageDescription = "";
+    setSending(true);
 
+    // append user message immediately
+    const newHistory = [
+      ...history,
+      { role: "user", text: input.trim(), image: image ? URL.createObjectURL(image) : null },
+    ];
+    setHistory(newHistory);
+    setInput("");
+
+    let imageDescription = "";
     try {
       if (image) {
         const form = new FormData();
         form.append("image", image);
         form.append("userId", userId);
         const up = await uploadImage(form);
-        const filename = up?.data?.filename || up?.filename;
-        imageDescription = filename
-          ? `Uploaded image: ${filename}`
-          : "Attached image";
+        imageDescription = `Uploaded image filename: ${up.data.filename}`;
       }
 
       const res = await chat({
         userId,
         topic,
-        message: input,
+        message: input.trim() || "(image only)",
         imageDescription,
       });
 
-      const reply = res?.data?.reply || res.reply || "";
-      setHistory((h) => [
-        ...h,
-        { role: "user", text: input, timestamp: Date.now() },
-        { role: "ai", text: reply, timestamp: Date.now() + 1 },
-      ]);
-      setInput("");
-      setImage(null);
-      onStatusRefresh && onStatusRefresh();
-    } catch (err) {
-      console.error("Chat error:", err);
-      const msg =
-        err?.response?.data?.error || err?.error || "Failed to get response";
-      setError(msg);
-      if (msg === "Trial expired" || msg === "Request limit reached") {
-        onLimitExceeded && onLimitExceeded();
+      if (res.data?.reply) {
+        setHistory((h) => [
+          ...h,
+          { role: "ai", text: res.data.reply },
+        ]);
+      } else if (res.data?.error) {
+        setError(res.data.error);
       }
+    } catch (e) {
+      console.error(e);
+      setError("Failed to send. Try again.");
     } finally {
-      setLoading(false);
+      setSending(false);
+      setImage(null);
+      // refresh usage info if provided
+      if (onStatusRefresh) onStatusRefresh();
+    }
+  };
+
+  // Optionally show upgraded limit exceeded
+  useEffect(() => {
+    if (status) {
+      const limits = {
+        trial: parseInt(import.meta.env.VITE_TRIAL_LIMIT || "5", 10),
+        Starter: parseInt(import.meta.env.VITE_STARTER_WEEKLY_LIMIT || "5", 10),
+        Pro: parseInt(import.meta.env.VITE_PRO_WEEKLY_LIMIT || "10", 10),
+        Elite: Infinity,
+      };
+      const limit = limits[status.package] ?? 0;
+      setUsageInfo({
+        used: status.requestsWeek,
+        limit,
+      });
+      if (limit !== Infinity && status.requestsWeek >= limit && onLimitExceeded) {
+        onLimitExceeded();
+      }
+    }
+  }, [status]);
+
+  const handleAttach = (e) => {
+    if (e.target.files && e.target.files[0]) {
+      setImage(e.target.files[0]);
     }
   };
 
@@ -71,122 +120,158 @@ export default function Chat({
         display: "flex",
         flexDirection: "column",
         height: "100vh",
-        maxWidth: 800,
-        margin: "0 auto",
         background: "#0f111a",
-        color: "#eee",
+        color: "#fff",
         fontFamily:
-          "-apple-system, system-ui, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen",
+          "-apple-system, system-ui, BlinkMacSystemFont, 'Segoe UI', Roboto",
       }}
     >
+      {/* Header */}
       <div
         style={{
           padding: "12px 16px",
           display: "flex",
           alignItems: "center",
+          borderBottom: "1px solid rgba(255,255,255,0.05)",
           gap: 12,
-          background: "#1f2233",
-          borderBottom: "1px solid #2f3249",
+          position: "sticky",
+          top: 0,
+          background: "#0f111a",
+          zIndex: 10,
         }}
       >
-        {onBack && (
-          <button
-            onClick={onBack}
+        <button
+          onClick={onBack}
+          style={{
+            background: "transparent",
+            border: "none",
+            color: "#fff",
+            fontSize: 18,
+            cursor: "pointer",
+            padding: 8,
+            marginRight: 4,
+          }}
+          aria-label="Back"
+        >
+          ←
+        </button>
+        <div style={{ flex: 1 }}>
+          <div style={{ fontSize: 18, fontWeight: 700 }}>
+            {topicTitles[topic] || topic.replace(/_/g, " ").toUpperCase()}
+          </div>
+        </div>
+        {usageInfo && (
+          <div
             style={{
-              background: "transparent",
-              border: "none",
-              color: "#aaa",
-              fontSize: 18,
-              cursor: "pointer",
+              background: "#1f2255",
+              padding: "6px 12px",
+              borderRadius: 999,
+              fontSize: 12,
+              display: "flex",
+              gap: 6,
+              alignItems: "center",
             }}
           >
-            ← Back
-          </button>
+            <div style={{ fontWeight: 600 }}>
+              {status.package} • Used {usageInfo.used} /{" "}
+              {usageInfo.limit === Infinity ? "∞" : usageInfo.limit}
+            </div>
+          </div>
         )}
-        <h2 style={{ margin: 0, flex: 1, fontSize: 18 }}>
-          {topic.replace(/_/g, " ").toUpperCase()}
-        </h2>
-        <div
-          style={{
-            fontSize: 12,
-            padding: "4px 10px",
-            background: "#222645",
-            borderRadius: 999,
-          }}
-        >
-          {status?.package} • Used {status?.requestsWeek} /{" "}
-          {status.package === "Elite" ? "∞" : topic === "Pro" ? 10 : 5}
-        </div>
       </div>
 
+      {/* Messages */}
       <div
+        ref={scrollRef}
         style={{
           flex: 1,
           overflowY: "auto",
-          padding: "16px 12px",
+          padding: "12px 16px",
           display: "flex",
           flexDirection: "column",
           gap: 12,
+          scrollBehavior: "smooth",
         }}
       >
-        {history.map((m, i) => {
-          const isUser = m.role === "user";
-          return (
+        {history.map((m, i) => (
+          <div
+            key={i}
+            style={{
+              display: "flex",
+              flexDirection: m.role === "ai" ? "row" : "row-reverse",
+              gap: 12,
+              alignItems: "flex-start",
+            }}
+          >
+            {/* Avatar placeholder */}
             <div
-              key={i}
               style={{
+                width: 36,
+                height: 36,
+                flexShrink: 0,
+                borderRadius: "50%",
+                background: m.role === "ai" ? "#6c63ff" : "#444",
                 display: "flex",
-                flexDirection: isUser ? "row-reverse" : "row",
-                alignItems: "flex-start",
-                gap: 8,
-                animation: "fadein 0.3s ease",
+                alignItems: "center",
+                justifyContent: "center",
+                fontSize: 14,
+                fontWeight: "600",
+                color: "#fff",
               }}
             >
-              <div
-                style={{
-                  flexShrink: 0,
-                  width: 36,
-                  height: 36,
-                  borderRadius: "50%",
-                  background: isUser ? "#684ed6" : "#3a3f6b",
-                  display: "flex",
-                  alignItems: "center",
-                  justifyContent: "center",
-                  fontSize: 18,
-                  color: "#fff",
-                }}
-              >
-                {isUser ? userAvatar : aiAvatar}
-              </div>
-              <div
-                style={{
-                  maxWidth: "80%",
-                  background: isUser ? "#2f2a55" : "#1f2245",
-                  padding: "12px 16px",
-                  borderRadius: 16,
-                  position: "relative",
-                  color: "#f0f0f0",
-                  fontSize: 14,
-                  lineHeight: 1.4,
-                  boxShadow:
-                    isUser
-                      ? "0 4px 16px rgba(104,78,214,0.2)"
-                      : "0 4px 16px rgba(58,63,107,0.2)",
-                }}
-              >
-                {m.text}
-              </div>
+              {m.role === "ai" ? "AI" : "You"}
             </div>
-          );
-        })}
+            <div
+              style={{
+                maxWidth: "100%",
+                background: m.role === "ai" ? "#1f2255" : "#1e1f2f",
+                padding: "12px 16px",
+                borderRadius: 12,
+                position: "relative",
+                fontSize: 14,
+                lineHeight: 1.5,
+                whiteSpace: "pre-wrap",
+                flex: 1,
+              }}
+            >
+              {m.text && <div>{m.text}</div>}
+              {m.image && (
+                <div style={{ marginTop: 8 }}>
+                  <img
+                    src={m.image}
+                    alt="uploaded"
+                    style={{
+                      maxWidth: "100%",
+                      borderRadius: 8,
+                      display: "block",
+                    }}
+                  />
+                </div>
+              )}
+            </div>
+          </div>
+        ))}
+        {sending && (
+          <div
+            style={{
+              textAlign: "center",
+              opacity: 0.8,
+              fontSize: 12,
+              marginTop: 8,
+            }}
+          >
+            Sending...
+          </div>
+        )}
         {error && (
           <div
             style={{
-              background: "#5c1f1f",
-              padding: 10,
+              background: "#ff4d4f",
+              padding: "8px 12px",
               borderRadius: 8,
-              color: "#ffe3e3",
-              fontSize: 13,
+              color: "#fff",
+              fontSize: 12,
+              maxWidth: 500,
             }}
           >
             {error}
@@ -194,81 +279,119 @@ export default function Chat({
         )}
       </div>
 
+      {/* Input area */}
       <div
         style={{
-          borderTop: "1px solid #2f3249",
-          padding: "12px 16px",
-          background: "#1f2233",
+          padding: 12,
+          borderTop: "1px solid rgba(255,255,255,0.05)",
           display: "flex",
           flexDirection: "column",
           gap: 8,
+          background: "#0f111a",
         }}
       >
-        <div style={{ display: "flex", gap: 12, alignItems: "flex-start" }}>
+        {image && (
+          <div
+            style={{
+              display: "flex",
+              gap: 12,
+              alignItems: "center",
+              background: "#1f224f",
+              padding: 8,
+              borderRadius: 8,
+              position: "relative",
+            }}
+          >
+            <div style={{ flex: 1, display: "flex", gap: 12, alignItems: "center" }}>
+              <div
+                style={{
+                  width: 50,
+                  height: 50,
+                  borderRadius: 6,
+                  overflow: "hidden",
+                  flexShrink: 0,
+                }}
+              >
+                <img
+                  src={URL.createObjectURL(image)}
+                  alt="preview"
+                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
+                />
+              </div>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: 14, fontWeight: 600 }}>
+                  {image.name}
+                </div>
+                <div style={{ fontSize: 12, opacity: 0.75 }}>
+                  {Math.round(image.size / 1024)} KB
+                </div>
+              </div>
+            </div>
+            <button
+              onClick={() => setImage(null)}
+              style={{
+                background: "transparent",
+                border: "none",
+                color: "#fff",
+                cursor: "pointer",
+                fontSize: 20,
+                padding: 4,
+              }}
+              aria-label="Remove"
+            >
+              ×
+            </button>
+          </div>
+        )}
+
+        <div
+          style={{
+            display: "flex",
+            gap: 8,
+            alignItems: "flex-end",
+          }}
+        >
           <div style={{ flex: 1, position: "relative" }}>
             <textarea
+              aria-label="Your message"
+              placeholder="Describe your setup or feeling..."
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Describe your setup or feeling..."
-              rows={2}
-              disabled={loading}
+              rows={1}
               style={{
                 width: "100%",
-                padding: "12px 14px",
-                borderRadius: 12,
                 resize: "none",
-                border: "1px solid #2f3249",
-                background: "#1c1f38",
+                padding: "14px 16px",
+                borderRadius: 14,
+                border: "1px solid rgba(255,255,255,0.08)",
+                background: "#1e1f2f",
                 color: "#fff",
                 fontSize: 14,
                 outline: "none",
-                boxShadow: "inset 0 0 8px rgba(255,255,255,0.03)",
+                overflow: "auto",
+                minHeight: 48,
+                boxSizing: "border-box",
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
               }}
             />
-            {image && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: "-24px",
-                  left: 0,
-                  background: "#272f5d",
-                  padding: "6px 10px",
-                  borderRadius: 8,
-                  display: "inline-flex",
-                  gap: 6,
-                  alignItems: "center",
-                  fontSize: 12,
-                  color: "#c0c8ff",
-                }}
-              >
-                <div style={{ marginRight: 6 }}>📷 {image.name}</div>
-                <button
-                  onClick={() => setImage(null)}
-                  style={{
-                    background: "transparent",
-                    border: "none",
-                    color: "#fff",
-                    cursor: "pointer",
-                  }}
-                  aria-label="remove image"
-                >
-                  ×
-                </button>
-              </div>
-            )}
           </div>
-          <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          <div style={{ display: "flex", gap: 8, flexWrap: "nowrap" }}>
             <label
               style={{
+                background: "#2a2f7f",
+                padding: "12px 14px",
+                borderRadius: 12,
                 cursor: "pointer",
-                padding: "8px 12px",
-                background: "#2f2a55",
-                borderRadius: 8,
-                fontSize: 12,
-                display: "inline-flex",
+                display: "flex",
                 alignItems: "center",
                 gap: 6,
-                color: "#fff",
+                fontSize: 14,
+                fontWeight: 600,
               }}
             >
               Attach
@@ -276,48 +399,50 @@ export default function Chat({
                 type="file"
                 accept="image/*"
                 style={{ display: "none" }}
-                onChange={(e) =>
-                  setImage(e.target.files ? e.target.files[0] : null)
-                }
-                disabled={loading}
+                onChange={handleAttach}
               />
             </label>
             <button
-              onClick={send}
-              disabled={loading || (!input.trim() && !image)}
+              onClick={handleSend}
+              disabled={sending || (!input.trim() && !image)}
               style={{
                 background: "#6c63ff",
                 border: "none",
-                padding: "10px 18px",
-                borderRadius: 12,
-                cursor: loading ? "default" : "pointer",
-                color: "#fff",
-                fontWeight: "600",
+                padding: "14px 20px",
+                borderRadius: 14,
+                cursor: "pointer",
+                fontWeight: 600,
                 fontSize: 14,
+                color: "#fff",
                 minWidth: 100,
-                alignSelf: "flex-end",
-                boxShadow: "0 12px 24px rgba(108,99,255,0.3)",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+                opacity: sending ? 0.7 : 1,
               }}
             >
-              {loading ? "Sending..." : "Send"}
+              {sending ? "Sending..." : "Send"}
             </button>
           </div>
         </div>
-        <div
-          style={{
-            fontSize: 12,
-            color: "#888",
-            display: "flex",
-            justifyContent: "space-between",
-          }}
-        >
-          <div>{status?.package} plan</div>
-          <div>
-            Used: {status?.requestsWeek} /{" "}
-            {status.package === "Elite" ? "∞" : status.package === "Pro" ? 10 : 5}
-          </div>
+
+        <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
+          {status?.package} plan • Used {status?.requestsWeek} /{" "}
+          {status?.package === "Elite" ? "∞" : usageInfoText(status)}
         </div>
       </div>
     </div>
   );
+}
+
+function usageInfoText(status) {
+  if (!status) return "";
+  const limits = {
+    trial: parseInt(import.meta.env.VITE_STARTER_WEEKLY_LIMIT || "5", 10),
+    Starter: parseInt(import.meta.env.VITE_STARTER_WEEKLY_LIMIT || "5", 10),
+    Pro: parseInt(import.meta.env.VITE_PRO_WEEKLY_LIMIT || "10", 10),
+    Elite: Infinity,
+  };
+  const limit = limits[status.package] ?? 0;
+  return limit === Infinity ? `${status.requestsWeek} / ∞` : `${status.requestsWeek} / ${limit}`;
 }
