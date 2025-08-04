@@ -8,6 +8,7 @@ setImmediate(() => {
     OPENAI_KEY: !!process.env.OPENAI_KEY,
     ADMIN_SECRET: !!process.env.ADMIN_SECRET,
     BOT_TOKEN: !!process.env.BOT_TOKEN,
+    PUBLIC_BASE_URL: !!process.env.PUBLIC_BASE_URL,
     PORT: process.env.PORT,
   });
 });
@@ -15,6 +16,7 @@ setImmediate(() => {
 const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
+const fetch = require("node-fetch");
 const { createClient } = require("@supabase/supabase-js");
 const OpenAI = require("openai");
 const multer = require("multer");
@@ -23,16 +25,21 @@ const fs = require("fs");
 const prompts = require("./prompts");
 
 const app = express();
-app.use(cors());
+app.use(
+  cors({
+    origin: true,
+    credentials: true,
+  })
+);
 app.use(bodyParser.json());
 
-// Supabase client
+// Supabase
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// OpenAI client
+// OpenAI
 const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
 
 // Telegram helper
@@ -40,40 +47,35 @@ const TELEGRAM_BOT_TOKEN = process.env.BOT_TOKEN;
 async function sendTelegramMessage(chatId, text, options = {}) {
   if (!TELEGRAM_BOT_TOKEN || !chatId) return;
   try {
-    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
-    const body = { chat_id: chatId, text, ...options };
-    const resp = await fetch(url, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
+    const resp = await fetch(
+      `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ chat_id: chatId, text, ...options }),
+      }
+    );
     const data = await resp.json();
-    if (!data.ok) {
-      console.warn("Telegram sendMessage failed:", data);
-    }
+    if (!data.ok) console.warn("Telegram send failed:", data);
   } catch (e) {
-    console.error("Telegram sendMessage error:", e);
+    console.error("Telegram error:", e);
   }
 }
 
-// Storage for uploads
+// Uploads folder
 const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 const upload = multer({ dest: uploadDir });
 
-// Utility: get or create user
+// Helpers: get/create user, rate limit
 async function getUser(userId) {
   const { data, error, status } = await supabase
     .from("users")
     .select("*")
     .eq("id", userId)
     .single();
-
-  if (error && status !== 406) {
-    console.warn("getUser select warning:", error);
-  }
+  if (error && status !== 406) console.warn("getUser select:", error);
   if (data) return data;
-
   const now = new Date().toISOString();
   const { data: upserted, error: upsertErr } = await supabase
     .from("users")
@@ -89,71 +91,60 @@ async function getUser(userId) {
     )
     .select()
     .single();
-
-  if (upsertErr) {
-    console.error("getUser upsert error:", upsertErr);
-    throw upsertErr;
-  }
+  if (upsertErr) throw upsertErr;
   return upserted;
 }
 
-// Rate limit / package logic
 async function checkAndIncrement(userId) {
   const user = await getUser(userId);
-  const now = new Date();
-  const lastReset = new Date(user.last_request_reset);
-  if ((now - lastReset) > 7 * 24 * 60 * 60 * 1000) {
+  const now = new Date(),
+    lastReset = new Date(user.last_request_reset);
+  if (now - lastReset > 7 * 24 * 60 * 60 * 1000) {
     await supabase
       .from("users")
       .update({ requests_week: 0, last_request_reset: now.toISOString() })
       .eq("id", userId);
     user.requests_week = 0;
   }
-
-  let limit;
+  let limit = 0;
   switch (user.package) {
     case "Elite":
       limit = Infinity;
       break;
     case "Pro":
-      limit = parseInt(process.env.PRO_WEEKLY_LIMIT || "10", 10);
+      limit = +process.env.PRO_WEEKLY_LIMIT || 10;
       break;
     case "Starter":
-      limit = parseInt(process.env.STARTER_WEEKLY_LIMIT || "5", 10);
+      limit = +process.env.STARTER_WEEKLY_LIMIT || 5;
       break;
     case "trial":
-      limit = parseInt(process.env.STARTER_WEEKLY_LIMIT || "5", 10);
+      limit = +process.env.STARTER_WEEKLY_LIMIT || 5;
       break;
-    default:
-      limit = 0;
   }
-
   if (user.requests_week >= limit) return { allowed: false, limit };
-
   await supabase
     .from("users")
     .update({ requests_week: user.requests_week + 1 })
     .eq("id", userId);
-
   return { allowed: true, limit };
 }
 
-// Health check
-app.get("/health", (req, res) => {
-  res.json({ status: "ok", time: new Date().toISOString() });
-});
+// --- Public endpoints ---
 
-// Get user status
+app.get("/health", (_, res) =>
+  res.json({ status: "ok", time: new Date().toISOString() })
+);
+
 app.get("/api/user/:id", async (req, res) => {
   try {
     const user = await getUser(req.params.id);
-    const now = new Date();
-    const trialStart = new Date(user.trial_start);
-    const elapsedHours = (now - trialStart) / (1000 * 60 * 60);
-    const trialActive =
-      user.package === "trial" &&
-      elapsedHours < parseInt(process.env.TRIAL_DURATION_HOURS || "24", 10);
-    const expired = user.package === "trial" && !trialActive;
+    const now = new Date(),
+      trialStart = new Date(user.trial_start),
+      elapsed = (now - trialStart) / 36e5,
+      trialActive =
+        user.package === "trial" &&
+        elapsed < +process.env.TRIAL_DURATION_HOURS || 24,
+      expired = user.package === "trial" && !trialActive;
     res.json({
       trialActive,
       expired,
@@ -161,263 +152,192 @@ app.get("/api/user/:id", async (req, res) => {
       requestsWeek: user.requests_week,
     });
   } catch (e) {
-    console.error("GET /api/user error:", e);
+    console.error(e);
     res.status(500).json({ error: "Failed to fetch user" });
   }
 });
 
-// Start trial
 app.post("/api/start-trial", async (req, res) => {
   const { userId } = req.body;
   if (!userId) return res.status(400).json({ error: "Missing userId" });
-  try {
-    const now = new Date().toISOString();
-    await supabase.from("users").upsert({
-      id: userId,
-      trial_start: now,
-      package: "trial",
-      requests_week: 0,
-      last_request_reset: now,
-    });
-    res.json({ success: true });
-  } catch (e) {
-    console.error("POST /api/start-trial error:", e);
-    res.status(500).json({ error: "Failed to start trial" });
-  }
+  const now = new Date().toISOString();
+  await supabase.from("users").upsert({
+    id: userId,
+    trial_start: now,
+    package: "trial",
+    requests_week: 0,
+    last_request_reset: now,
+  });
+  res.json({ success: true });
 });
 
-// Manual activation
 app.post("/api/activate", async (req, res) => {
   const { userId, package: pkg } = req.body;
   if (!userId || !pkg)
     return res.status(400).json({ error: "Missing userId or package" });
-
-  try {
-    await supabase.from("users").upsert({
-      id: userId,
-      package: pkg,
-      requests_week: 0,
-      last_request_reset: new Date().toISOString(),
-    });
-    res.json({ success: true });
-  } catch (e) {
-    console.error("POST /api/activate error:", e);
-    res.status(500).json({ error: "Activation failed" });
-  }
+  await supabase.from("users").upsert({
+    id: userId,
+    package: pkg,
+    requests_week: 0,
+    last_request_reset: new Date().toISOString(),
+  });
+  res.json({ success: true });
 });
 
-// Upload image
 app.post("/api/upload", upload.single("image"), async (req, res) => {
-  const userId = req.body.userId;
-  const file = req.file;
+  const { userId } = req.body,
+    file = req.file;
   if (!userId || !file)
     return res.status(400).json({ error: "Missing userId or image" });
-
-  try {
-    await supabase.from("images").insert({
-      user_id: userId,
-      file_path: file.filename,
-      uploaded_at: new Date().toISOString(),
-    });
-    res.json({ success: true, filename: file.filename });
-  } catch (e) {
-    console.error("POST /api/upload error:", e);
-    res.status(500).json({ error: "Image upload failed" });
-  }
+  await supabase.from("images").insert({
+    user_id: userId,
+    file_path: file.filename,
+    uploaded_at: new Date().toISOString(),
+  });
+  res.json({ success: true, filename: file.filename });
 });
 
-// Chat endpoint
+// Main chat
 app.post("/api/chat", async (req, res) => {
   const { userId, topic, message, imageDescription } = req.body;
   if (!userId || !topic || !message)
-    return res.status(400).json({ error: "Missing required fields" });
-
+    return res.status(400).json({ error: "Missing fields" });
   try {
     const userRow = await getUser(userId);
-
+    // expire trial
     if (userRow.package === "trial") {
-      const now = new Date();
-      const trialStart = new Date(userRow.trial_start);
-      if (
-        now - trialStart >
-        parseInt(process.env.TRIAL_DURATION_HOURS || "24", 10) *
-          60 *
-          60 *
-          1000
-      ) {
+      const now = Date.now(),
+        start = new Date(userRow.trial_start).getTime(),
+        limitMs = (+process.env.TRIAL_DURATION_HOURS || 24) * 36e5;
+      if (now - start > limitMs)
         return res.status(403).json({ error: "Trial expired" });
-      }
     }
+    const { allowed } = await checkAndIncrement(userId);
+    if (!allowed) return res.status(429).json({ error: "Rate limit" });
 
-    const { allowed, limit } = await checkAndIncrement(userId);
-    if (!allowed) {
-      return res.status(429).json({ error: "Request limit reached", limit });
-    }
-
-    const promptBuilder = prompts[topic];
-    if (!promptBuilder)
-      return res.status(400).json({ error: "Unknown topic" });
-
-    const messages = promptBuilder(message, imageDescription || "");
-
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages,
-    });
-
-    const reply = completion.choices?.[0]?.message?.content;
-    if (!reply) {
-      return res.status(500).json({ error: "No reply from OpenAI" });
-    }
-
-    res.json({ reply });
-  } catch (err) {
-    console.error("POST /api/chat error:", err);
-    res.status(500).json({ error: err?.message || "Chat processing failed" });
-  }
-});
-
-// Submit payment (user)
-app.post("/api/submit-payment", async (req, res) => {
-  const { userId, package: pkg, txid } = req.body;
-  if (!userId || !pkg || !txid)
-    return res
-      .status(400)
-      .json({ error: "userId, package, and txid required" });
-
-  try {
-    const { error } = await supabase.from("pending_payments").insert({
-      user_id: userId,
-      package: pkg,
-      txid,
-      status: "pending",
-    });
-
-    if (error) {
-      console.error("Insert pending payment error:", error);
-      return res
-        .status(500)
-        .json({ error: "Failed to store pending payment" });
-    }
-
-    // Notify user of submission
-    await sendTelegramMessage(
-      userId,
-      `✅ Payment submission received for *${pkg}* plan.\nTXID: \`${txid}\`\nOur team will review and activate shortly.`,
-      { parse_mode: "Markdown" }
-    );
-
-    res.json({
-      success: true,
-      message: "Payment submitted, awaiting manual verification.",
-    });
-  } catch (e) {
-    console.error("POST /api/submit-payment error:", e);
-    res.status(500).json({ error: "Submission failed" });
-  }
-});
-
-// Get latest pending payment for a user
-app.get("/api/pending-payment", async (req, res) => {
-  const { userId } = req.query;
-  if (!userId) return res.status(400).json({ error: "userId required" });
-
-  try {
-    const { data, error } = await supabase
-      .from("pending_payments")
+    // conversation storage
+    const { data: convs } = await supabase
+      .from("conversations")
       .select("*")
       .eq("user_id", userId)
+      .eq("topic", topic)
       .order("created_at", { ascending: false })
-      .limit(1)
-      .single();
-
-    if (error && error.code !== "PGRST116") {
-      // PGRST116 might be no rows? handle gracefully
-      console.warn("pending-payment fetch warning:", error);
+      .limit(1);
+    let conversation = convs?.[0];
+    if (!conversation) {
+      const { data: nc } = await supabase
+        .from("conversations")
+        .insert({ user_id: userId, topic })
+        .select()
+        .single();
+      conversation = nc;
     }
-    res.json(data || {});
-  } catch (e) {
-    console.error("GET /api/pending-payment error:", e);
-    res.status(500).json({ error: "Internal error" });
-  }
-});
-
-// Admin: list pending payments
-app.get("/api/admin/pending-payments", async (req, res) => {
-  const secret = req.headers["x-admin-secret"];
-  if (secret !== process.env.ADMIN_SECRET)
-    return res.status(403).json({ error: "Forbidden" });
-
-  try {
-    const { data, error } = await supabase
-      .from("pending_payments")
-      .select("*")
-      .order("created_at", { ascending: false });
-
-    if (error) {
-      console.error("GET pending-payments error:", error);
-      return res.status(500).json({ error: "Failed to fetch pending payments" });
-    }
-
-    res.json(data);
-  } catch (e) {
-    console.error("GET /api/admin/pending-payments error:", e);
-    res.status(500).json({ error: "Internal error" });
-  }
-});
-
-// Admin: approve payment
-app.post("/api/admin/approve-payment", async (req, res) => {
-  const secret = req.headers["x-admin-secret"];
-  if (secret !== process.env.ADMIN_SECRET)
-    return res.status(403).json({ error: "Forbidden" });
-
-  const { txid, admin_notes } = req.body;
-  if (!txid) return res.status(400).json({ error: "txid required" });
-
-  try {
-    const { data: pending, error: fetchErr } = await supabase
-      .from("pending_payments")
-      .select("*")
-      .eq("txid", txid)
-      .single();
-
-    if (fetchErr || !pending) {
-      return res.status(404).json({ error: "Pending payment not found" });
-    }
-
-    const userId = pending.user_id;
-    const pkg = pending.package;
-
-    // Activate user
-    await supabase.from("users").upsert({
-      id: userId,
-      package: pkg,
-      requests_week: 0,
-      last_request_reset: new Date().toISOString(),
+    // store user message
+    await supabase.from("messages").insert({
+      conversation_id: conversation.id,
+      role: "user",
+      content: message,
+      image_url: null,
     });
 
-    // Update pending payment row
-    await supabase
-      .from("pending_payments")
-      .update({
-        status: "approved",
-        verified_at: new Date().toISOString(),
-        admin_notes: admin_notes || "Manually approved",
-      })
-      .eq("txid", txid);
+    // run AI
+    const systemPrompt = prompts[topic]?.(message, imageDescription || "");
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4",
+      messages: systemPrompt,
+    });
+    const reply = completion.choices[0].message.content;
+    // store AI
+    await supabase.from("messages").insert({
+      conversation_id: conversation.id,
+      role: "ai",
+      content: reply,
+      image_url: null,
+    });
+    res.json({ reply });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Chat failed" });
+  }
+});
 
-    // Notify user of activation
+// --- New: expose conversation to user-side ---
+app.get("/api/conversation", async (req, res) => {
+  const { userId, topic } = req.query;
+  if (!userId || !topic)
+    return res.status(400).json({ error: "userId and topic required" });
+  try {
+    const { data: convs } = await supabase
+      .from("conversations")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("topic", topic)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    let conversation = convs?.[0];
+    if (!conversation) {
+      const { data: nc } = await supabase
+        .from("conversations")
+        .insert({ user_id: userId, topic })
+        .select()
+        .single();
+      conversation = nc;
+    }
+    const { data: messages } = await supabase
+      .from("messages")
+      .select("*")
+      .eq("conversation_id", conversation.id)
+      .order("created_at", { ascending: true });
+    res.json({ conversation, messages });
+  } catch (e) {
+    console.error(e);
+    res.status(500).json({ error: "Fetch conversation failed" });
+  }
+});
+
+// Admin: respond (already in your flow)
+app.post("/api/admin/respond", async (req, res) => {
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== process.env.ADMIN_SECRET)
+    return res.status(403).json({ error: "Forbidden" });
+  const { userId, topic, reply, markFinal } = req.body;
+  if (!userId || !topic || !reply)
+    return res.status(400).json({ error: "Missing fields" });
+  try {
+    // get conversation
+    const { data: convs } = await supabase
+      .from("conversations")
+      .select("*")
+      .eq("user_id", userId)
+      .eq("topic", topic)
+      .order("created_at", { ascending: false })
+      .limit(1);
+    let conv = convs?.[0];
+    if (!conv) {
+      const { data: nc } = await supabase
+        .from("conversations")
+        .insert({ user_id: userId, topic })
+        .select()
+        .single();
+      conv = nc;
+    }
+    // store admin message
+    await supabase.from("messages").insert({
+      conversation_id: conv.id,
+      role: "admin",
+      content: reply,
+      is_final: !!markFinal,
+    });
+    // notify Telegram user
     await sendTelegramMessage(
       userId,
-      `🎉 Your *${pkg}* plan has been activated. You now have access.`,
+      `✉️ *Support Reply*\n\n${reply}`,
       { parse_mode: "Markdown" }
     );
-
-    res.json({ success: true, activated: pkg });
+    res.json({ success: true });
   } catch (e) {
-    console.error("POST /api/admin/approve-payment error:", e);
-    res.status(500).json({ error: "Approval failed" });
+    console.error(e);
+    res.status(500).json({ error: "Respond failed" });
   }
 });
 
