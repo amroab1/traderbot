@@ -281,156 +281,149 @@ export default function Chat({
 
       {/* Input area */}
       <div
+  style={{
+    padding: 12,
+    borderTop: "1px solid rgba(255,255,255,0.05)",
+    background: "#0f111a",
+    display: "flex",
+    flexDirection: "column",
+    gap: 6,
+  }}
+>
+  {image && (
+    <div
+      style={{
+        display: "flex",
+        gap: 12,
+        alignItems: "center",
+        background: "#1f224f",
+        padding: 8,
+        borderRadius: 8,
+      }}
+    >
+      <div
         style={{
-          padding: 12,
-          borderTop: "1px solid rgba(255,255,255,0.05)",
-          display: "flex",
-          flexDirection: "column",
-          gap: 8,
-          background: "#0f111a",
+          width: 50,
+          height: 50,
+          borderRadius: 6,
+          overflow: "hidden",
+          flexShrink: 0,
         }}
       >
-        {image && (
-          <div
-            style={{
-              display: "flex",
-              gap: 12,
-              alignItems: "center",
-              background: "#1f224f",
-              padding: 8,
-              borderRadius: 8,
-              position: "relative",
-            }}
-          >
-            <div style={{ flex: 1, display: "flex", gap: 12, alignItems: "center" }}>
-              <div
-                style={{
-                  width: 50,
-                  height: 50,
-                  borderRadius: 6,
-                  overflow: "hidden",
-                  flexShrink: 0,
-                }}
-              >
-                <img
-                  src={URL.createObjectURL(image)}
-                  alt="preview"
-                  style={{ width: "100%", height: "100%", objectFit: "cover" }}
-                />
-              </div>
-              <div style={{ flex: 1 }}>
-                <div style={{ fontSize: 14, fontWeight: 600 }}>
-                  {image.name}
-                </div>
-                <div style={{ fontSize: 12, opacity: 0.75 }}>
-                  {Math.round(image.size / 1024)} KB
-                </div>
-              </div>
-            </div>
-            <button
-              onClick={() => setImage(null)}
-              style={{
-                background: "transparent",
-                border: "none",
-                color: "#fff",
-                cursor: "pointer",
-                fontSize: 20,
-                padding: 4,
-              }}
-              aria-label="Remove"
-            >
-              ×
-            </button>
-          </div>
-        )}
-
-        <div
-          style={{
-            display: "flex",
-            gap: 8,
-            alignItems: "flex-end",
-          }}
-        >
-          <div style={{ flex: 1, position: "relative" }}>
-            <textarea
-              aria-label="Your message"
-              placeholder="Describe your setup or feeling..."
-              value={input}
-              onChange={(e) => setInput(e.target.value)}
-              rows={1}
-              style={{
-                width: "100%",
-                resize: "none",
-                padding: "14px 16px",
-                borderRadius: 14,
-                border: "1px solid rgba(255,255,255,0.08)",
-                background: "#1e1f2f",
-                color: "#fff",
-                fontSize: 14,
-                outline: "none",
-                overflow: "auto",
-                minHeight: 48,
-                boxSizing: "border-box",
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && !e.shiftKey) {
-                  e.preventDefault();
-                  handleSend();
-                }
-              }}
-            />
-          </div>
-          <div style={{ display: "flex", gap: 8, flexWrap: "nowrap" }}>
-            <label
-              style={{
-                background: "#2a2f7f",
-                padding: "12px 14px",
-                borderRadius: 12,
-                cursor: "pointer",
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                fontSize: 14,
-                fontWeight: 600,
-              }}
-            >
-              Attach
-              <input
-                type="file"
-                accept="image/*"
-                style={{ display: "none" }}
-                onChange={handleAttach}
-              />
-            </label>
-            <button
-              onClick={handleSend}
-              disabled={sending || (!input.trim() && !image)}
-              style={{
-                background: "#6c63ff",
-                border: "none",
-                padding: "14px 20px",
-                borderRadius: 14,
-                cursor: "pointer",
-                fontWeight: 600,
-                fontSize: 14,
-                color: "#fff",
-                minWidth: 100,
-                display: "flex",
-                alignItems: "center",
-                gap: 6,
-                opacity: sending ? 0.7 : 1,
-              }}
-            >
-              {sending ? "Sending..." : "Send"}
-            </button>
-          </div>
-        </div>
-
-        <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
-          {status?.package} plan • Used {status?.requestsWeek} /{" "}
-          {status?.package === "Elite" ? "∞" : usageInfoText(status)}
+        <img
+          src={URL.createObjectURL(image)}
+          alt="preview"
+          style={{ width: "100%", height: "100%", objectFit: "cover" }}
+        />
+      </div>
+      <div style={{ flex: 1 }}>
+        <div style={{ fontSize: 14, fontWeight: 600 }}>{image.name}</div>
+        <div style={{ fontSize: 12, opacity: 0.75 }}>
+          {Math.round(image.size / 1024)} KB
         </div>
       </div>
+      <button
+        onClick={() => setImage(null)}
+        style={{
+          background: "transparent",
+          border: "none",
+          color: "#fff",
+          cursor: "pointer",
+          fontSize: 20,
+          padding: 4,
+        }}
+        aria-label="Remove"
+      >
+        ×
+      </button>
+    </div>
+  )}
+
+  <textarea
+    aria-label="Your message"
+    placeholder="Describe your setup or feeling..."
+    value={input}
+    onChange={(e) => setInput(e.target.value)}
+    rows={2}
+    style={{
+      width: "100%",
+      resize: "none",
+      padding: "14px 16px",
+      borderRadius: 14,
+      border: "1px solid rgba(255,255,255,0.08)",
+      background: "#1e1f2f",
+      color: "#fff",
+      fontSize: 14,
+      outline: "none",
+      overflow: "auto",
+      boxSizing: "border-box",
+      minHeight: 64,
+    }}
+    onKeyDown={(e) => {
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        handleSend();
+      }
+    }}
+  />
+
+  <div
+    style={{
+      display: "flex",
+      justifyContent: "space-between",
+      alignItems: "center",
+      gap: 12,
+      flexWrap: "wrap",
+    }}
+  >
+    <label
+      style={{
+        background: "#2a2f7f",
+        padding: "10px 16px",
+        borderRadius: 12,
+        cursor: "pointer",
+        display: "inline-flex",
+        alignItems: "center",
+        gap: 6,
+        fontSize: 14,
+        fontWeight: 600,
+      }}
+    >
+      Attach
+      <input
+        type="file"
+        accept="image/*"
+        style={{ display: "none" }}
+        onChange={handleAttach}
+      />
+    </label>
+    <div style={{ marginLeft: "auto", display: "flex", gap: 8 }}>
+      <button
+        onClick={handleSend}
+        disabled={sending || (!input.trim() && !image)}
+        style={{
+          background: "#6c63ff",
+          border: "none",
+          padding: "12px 24px",
+          borderRadius: 14,
+          cursor: "pointer",
+          fontWeight: 600,
+          fontSize: 14,
+          color: "#fff",
+          minWidth: 100,
+          opacity: sending ? 0.8 : 1,
+        }}
+      >
+        {sending ? "Sending..." : "Send"}
+      </button>
+    </div>
+  </div>
+
+  <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
+    {status?.package} plan • Used {status?.requestsWeek} /{" "}
+    {status?.package === "Elite" ? "∞" : usageInfoText(status)}
+  </div>
+</div>
     </div>
   );
 }
