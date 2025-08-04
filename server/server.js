@@ -1,26 +1,14 @@
 // server/server.js
 require("dotenv").config();
 
-// Crash visibility
-process.on("uncaughtException", (err) => {
-  console.error("UNCAUGHT EXCEPTION:", err);
-});
-process.on("unhandledRejection", (reason, p) => {
-  console.error("UNHANDLED REJECTION at:", p, "reason:", reason);
-});
-
-// Deferred env log
 setImmediate(() => {
   console.log("ENV status:", {
     SUPABASE_URL: !!process.env.SUPABASE_URL,
     SUPABASE_SERVICE_ROLE_KEY: !!process.env.SUPABASE_SERVICE_ROLE_KEY,
     OPENAI_KEY: !!process.env.OPENAI_KEY,
-    OPENAI_MODEL: !!process.env.OPENAI_MODEL,
-    VISION_MODEL: !!process.env.VISION_MODEL,
-    PUBLIC_BASE_URL: !!process.env.PUBLIC_BASE_URL,
-    BOT_TOKEN: !!process.env.BOT_TOKEN,
     ADMIN_SECRET: !!process.env.ADMIN_SECRET,
-    APP_URL: !!process.env.APP_URL,
+    BOT_TOKEN: !!process.env.BOT_TOKEN,
+    PUBLIC_BASE_URL: !!process.env.PUBLIC_BASE_URL,
     PORT: process.env.PORT,
   });
 });
@@ -28,24 +16,19 @@ setImmediate(() => {
 const express = require("express");
 const cors = require("cors");
 const bodyParser = require("body-parser");
+const fetch = global.fetch || require("node-fetch");
 const { createClient } = require("@supabase/supabase-js");
 const OpenAI = require("openai");
 const multer = require("multer");
 const path = require("path");
 const fs = require("fs");
-const prompts = require("./prompts");
-const { Telegraf } = require("telegraf");
+const prompts = require("./prompts"); // updated prompt builders
 
 const app = express();
 app.use(cors());
 app.use(bodyParser.json());
 
-// Health endpoint
-app.get("/health", (req, res) => {
-  res.json({ status: "ok", uptime: process.uptime() });
-});
-
-// Static serve uploads
+// expose uploads so images are publicly reachable
 app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Supabase client
@@ -57,7 +40,31 @@ const supabase = createClient(
 // OpenAI client
 const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
 
-// Utility functions
+// Telegram helper
+const TELEGRAM_BOT_TOKEN = process.env.BOT_TOKEN;
+async function sendTelegramMessage(chatId, text, options = {}) {
+  if (!TELEGRAM_BOT_TOKEN || !chatId) return;
+  try {
+    const url = `https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage`;
+    const body = { chat_id: chatId, text, ...options };
+    const resp = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+    const j = await resp.json();
+    if (!j.ok) console.warn("Telegram send failed:", j);
+  } catch (e) {
+    console.error("Telegram send error:", e);
+  }
+}
+
+// Storage setup
+const uploadDir = path.join(__dirname, "uploads");
+if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
+const upload = multer({ dest: uploadDir });
+
+// Utility: get or create user
 async function getUser(userId) {
   const { data, error, status } = await supabase
     .from("users")
@@ -93,6 +100,7 @@ async function getUser(userId) {
   return upserted;
 }
 
+// Rate limit logic
 async function checkAndIncrement(userId) {
   const user = await getUser(userId);
   const now = new Date();
@@ -133,8 +141,10 @@ async function checkAndIncrement(userId) {
   return { allowed: true, limit };
 }
 
+// Sanitize model reply to strip unwanted self-identification
 function sanitizeReply(text) {
   if (!text) return text;
+  // remove common disclaimers about being AI or inability to view images
   const lines = text
     .split("\n")
     .filter(
@@ -145,18 +155,12 @@ function sanitizeReply(text) {
   return lines.join("\n").trim();
 }
 
-// Image upload setup
-const uploadDir = path.join(__dirname, "uploads");
-if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
-const upload = multer({ dest: uploadDir });
-
-// Echo test
-app.post("/api/test-echo", (req, res) => {
-  console.log("ECHO /api/test-echo", req.body);
-  res.json({ received: req.body });
+// Health endpoint
+app.get("/health", (req, res) => {
+  res.json({ status: "ok", time: new Date().toISOString() });
 });
 
-// User status
+// Get user status
 app.get("/api/user/:id", async (req, res) => {
   try {
     const user = await getUser(req.params.id);
@@ -199,11 +203,12 @@ app.post("/api/start-trial", async (req, res) => {
   }
 });
 
-// Activate package manually
+// Manual activation
 app.post("/api/activate", async (req, res) => {
   const { userId, package: pkg } = req.body;
   if (!userId || !pkg)
     return res.status(400).json({ error: "Missing userId or package" });
+
   try {
     await supabase.from("users").upsert({
       id: userId,
@@ -224,6 +229,7 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
   const file = req.file;
   if (!userId || !file)
     return res.status(400).json({ error: "Missing userId or image" });
+
   try {
     await supabase.from("images").insert({
       user_id: userId,
@@ -242,109 +248,100 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
   }
 });
 
-// Chat endpoint
+// Chat endpoint (with image analysis)
 app.post("/api/chat", async (req, res) => {
   const { userId, topic, message, imageFilename } = req.body;
-  console.log("Incoming /api/chat", { userId, topic, message, imageFilename });
-
   if (!userId || !topic || !message)
-    return res.status(400).json({ error: "Missing required fields: userId, topic, message" });
+    return res.status(400).json({ error: "Missing required fields" });
 
-  let userRow;
-  try {
-    userRow = await getUser(userId);
-    console.log("User row:", { id: userRow.id, package: userRow.package });
-  } catch (err) {
-    console.error("getUser failed:", err);
-    return res.status(500).json({ error: "User lookup failed" });
+  // Basic trading-related detection: if message looks off-topic, redirect
+  const lower = message.toLowerCase();
+  const tradingKeywords = [
+    "trade",
+    "setup",
+    "risk",
+    "stop loss",
+    "take profit",
+    "entry",
+    "account",
+    "margin",
+    "drawdown",
+    "psychology",
+    "overtrading",
+    "revenge",
+    "funded",
+    "prop firm",
+    "challenge",
+    "position sizing",
+    "strategy",
+    "chart",
+    "support",
+    "resistance",
+  ];
+  const isRelated = tradingKeywords.some((k) => lower.includes(k));
+  if (!isRelated) {
+    return res.json({
+      reply:
+        "I’m specialized in trading support only. Please ask about trade setups, risk management, trading psychology, or account issues.",
+    });
   }
 
-  // Trial expiration
-  if (userRow.package === "trial") {
-    const now = new Date();
-    const trialStart = new Date(userRow.trial_start);
-    if (
-      now - trialStart >
-      parseInt(process.env.TRIAL_DURATION_HOURS || "24", 10) * 60 * 60 * 1000
-    ) {
-      console.log("Trial expired for", userId);
-      return res.status(403).json({ error: "Trial expired" });
+  try {
+    const userRow = await getUser(userId);
+
+    if (userRow.package === "trial") {
+      const now = new Date();
+      const trialStart = new Date(userRow.trial_start);
+      if (
+        now - trialStart >
+        parseInt(process.env.TRIAL_DURATION_HOURS || "24", 10) *
+          60 *
+          60 *
+          1000
+      ) {
+        return res.status(403).json({ error: "Trial expired" });
+      }
     }
-  }
 
-  // Rate limit
-  let rateCheck;
-  try {
-    rateCheck = await checkAndIncrement(userId);
-    console.log("Rate check:", rateCheck);
-    if (!rateCheck.allowed) {
-      return res.status(429).json({ error: "Request limit reached", limit: rateCheck.limit });
+    const { allowed, limit } = await checkAndIncrement(userId);
+    if (!allowed) {
+      return res.status(429).json({ error: "Request limit reached", limit });
     }
-  } catch (err) {
-    console.error("Rate check failed:", err);
-    return res.status(500).json({ error: "Rate limit check failed" });
-  }
 
-  // Build prompt
-  let imageUrl = "";
-  if (imageFilename) {
-    const base =
-      process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`;
-    imageUrl = `${base}/uploads/${imageFilename}`;
-  }
+    // Build prompt
+    let imageUrl = "";
+    if (imageFilename) {
+      const base =
+        process.env.PUBLIC_BASE_URL || `${req.protocol}://${req.get("host")}`;
+      imageUrl = `${base}/uploads/${imageFilename}`;
+    }
+    const messages = prompts[topic](message, imageUrl);
 
-  if (!prompts[topic]) {
-    console.warn("Unknown topic:", topic);
-    return res.status(400).json({ error: "Unknown topic" });
-  }
+    // choose model (can override via env)
+    const model = process.env.OPENAI_MODEL || "gpt-4";
 
-  let messages;
-  try {
-    messages = prompts[topic](message, imageUrl);
-  } catch (err) {
-    console.error("Prompt builder error:", err);
-    return res.status(500).json({ error: "Prompt construction failed" });
-  }
-
-  // Choose model
-  let model = process.env.OPENAI_MODEL || "gpt-4";
-  if (imageUrl && process.env.VISION_MODEL) {
-    model = process.env.VISION_MODEL;
-  }
-  console.log("Using model:", model);
-
-  try {
-    const completion = await Promise.race([
-      openai.chat.completions.create({
-        model,
-        messages,
-        temperature: 0.3,
-      }),
-      new Promise((_, reject) =>
-        setTimeout(() => reject(new Error("OpenAI request timed out")), 20000)
-      ),
-    ]);
+    const completion = await openai.chat.completions.create({
+      model,
+      messages,
+    });
 
     let reply = completion.choices?.[0]?.message?.content || "";
     reply = sanitizeReply(reply);
-    if (reply.length > 4000) {
-      reply = reply.slice(0, 4000) + "\n\n*(response truncated for stability)*";
-    }
-    console.log("Reply generated (truncated):", reply.slice(0, 200));
-    return res.json({ reply });
+
+    res.json({ reply });
   } catch (err) {
-    console.error("OpenAI error or timeout:", err);
-    return res.status(500).json({
-      error: err.message || "OpenAI request failed or timed out",
-    });
+    console.error("POST /api/chat error:", err);
+    res.status(500).json({ error: err?.message || "Chat processing failed" });
   }
 });
 
-// Submit payment (pending)
+// Submit payment
 app.post("/api/submit-payment", async (req, res) => {
   const { userId, package: pkg, txid } = req.body;
   if (!userId || !pkg || !txid)
-    return res.status(400).json({ error: "userId, package, and txid required" });
+    return res
+      .status(400)
+      .json({ error: "userId, package, and txid required" });
 
   try {
     const { error } = await supabase.from("pending_payments").insert({
@@ -353,13 +350,15 @@ app.post("/api/submit-payment", async (req, res) => {
       txid,
       status: "pending",
     });
+
     if (error) {
-      console.error("pending payment insert error:", error);
-      return res.status(500).json({ error: "Failed to store pending payment" });
+      console.error("Insert pending payment error:", error);
+      return res
+        .status(500)
+        .json({ error: "Failed to store pending payment" });
     }
 
-    // Notify user via Telegram
-    await bot.telegram.sendMessage(
+    await sendTelegramMessage(
       userId,
       `✅ Payment submission received for *${pkg}* plan.\nTXID: \`${txid}\`\nOur team will review and activate shortly.`,
       { parse_mode: "Markdown" }
@@ -370,7 +369,7 @@ app.post("/api/submit-payment", async (req, res) => {
       message: "Payment submitted, awaiting manual verification.",
     });
   } catch (e) {
-    console.error("submit-payment error:", e);
+    console.error("POST /api/submit-payment error:", e);
     res.status(500).json({ error: "Submission failed" });
   }
 });
@@ -388,12 +387,13 @@ app.get("/api/pending-payment", async (req, res) => {
       .order("created_at", { ascending: false })
       .limit(1)
       .single();
+
     if (error && error.code !== "PGRST116") {
       console.warn("pending-payment fetch warning:", error);
     }
     res.json(data || {});
   } catch (e) {
-    console.error("pending-payment retrieval error:", e);
+    console.error("GET /api/pending-payment error:", e);
     res.status(500).json({ error: "Internal error" });
   }
 });
@@ -409,13 +409,17 @@ app.get("/api/admin/pending-payments", async (req, res) => {
       .from("pending_payments")
       .select("*")
       .order("created_at", { ascending: false });
+
     if (error) {
-      console.error("admin pending-payments error:", error);
-      return res.status(500).json({ error: "Failed to fetch pending payments" });
+      console.error("GET pending-payments error:", error);
+      return res
+        .status(500)
+        .json({ error: "Failed to fetch pending payments" });
     }
+
     res.json(data);
   } catch (e) {
-    console.error("admin/pending-payments error:", e);
+    console.error("GET /api/admin/pending-payments error:", e);
     res.status(500).json({ error: "Internal error" });
   }
 });
@@ -435,6 +439,7 @@ app.post("/api/admin/approve-payment", async (req, res) => {
       .select("*")
       .eq("txid", txid)
       .single();
+
     if (fetchErr || !pending) {
       return res.status(404).json({ error: "Pending payment not found" });
     }
@@ -458,7 +463,7 @@ app.post("/api/admin/approve-payment", async (req, res) => {
       })
       .eq("txid", txid);
 
-    await bot.telegram.sendMessage(
+    await sendTelegramMessage(
       userId,
       `🎉 Your *${pkg}* plan has been activated. You now have access.`,
       { parse_mode: "Markdown" }
@@ -466,114 +471,10 @@ app.post("/api/admin/approve-payment", async (req, res) => {
 
     res.json({ success: true, activated: pkg });
   } catch (e) {
-    console.error("approve-payment error:", e);
+    console.error("POST /api/admin/approve-payment error:", e);
     res.status(500).json({ error: "Approval failed" });
   }
 });
 
-//
-// Telegram Bot Webhook Setup
-//
-const bot = new Telegraf(process.env.BOT_TOKEN);
-
-// Remove any existing webhook to avoid conflicts (safe: deletes if set)
-bot.telegram.deleteWebhook().catch(() => {});
-
-// Handlers
-bot.start(async (ctx) => {
-  const menuKeyboard = {
-    reply_markup: {
-      inline_keyboard: [
-        [
-          { text: "📊 Trade Setup Review", callback_data: "trade_setup" },
-          { text: "🏥 Account Health Check", callback_data: "account_health" },
-        ],
-        [
-          { text: "🧠 Psychology Support", callback_data: "psychology" },
-          { text: "🏦 Funded Account Advice", callback_data: "funded_account" },
-        ],
-        [
-          { text: "🚨 Margin Call Emergency", callback_data: "margin_call" },
-          { text: "📞 Live Call Request", callback_data: "live_call" },
-        ],
-        [
-          {
-            text: "🌐 Open App",
-            web_app: { url: process.env.APP_URL || "" }, // web app link
-          },
-        ],
-      ],
-    },
-  };
-
-  await ctx.reply(
-    `👋 Welcome to Trading Support Bot!\n\nChoose a service below or open the app to start your free trial.`,
-    menuKeyboard
-  );
-});
-
-bot.action(/.*/, async (ctx) => {
-  const data = ctx.callbackQuery?.data;
-  if (!data) return;
-  // For simplicity, echo back the selection and let frontend/AI handle next steps
-  let responseText = "";
-  switch (data) {
-    case "trade_setup":
-      responseText = "📉 TRADE SETUP REVIEW:\nPlease send screenshot, entry/SL/TP, strategy.";
-      break;
-    case "account_health":
-      responseText = "📊 ACCOUNT HEALTH CHECK:\nSend account summary, recent trades, balance/equity.";
-      break;
-    case "psychology":
-      responseText = "🧠 TRADE PSYCHOLOGY SUPPORT:\nHow are you feeling? (Anxious, overtrading, etc.)";
-      break;
-    case "funded_account":
-      responseText = "🏆 FUNDED ACCOUNT RISK ADVICE:\nSend challenge rules, current stats, balance/risk%.";
-      break;
-    case "margin_call":
-      responseText =
-        "🚨 MARGIN CALL EMERGENCY:\nSend open trades screenshot, balance/equity/margin%.";
-      break;
-    case "live_call":
-      responseText = "🔴 LIVE CALL REQUEST: Elite members only. Please upgrade if needed.";
-      break;
-    default:
-      responseText = "Unknown selection.";
-  }
-  try {
-    await ctx.editMessageText(responseText);
-  } catch {
-    await ctx.reply(responseText);
-  }
-});
-
-// Webhook receiver for Telegram
-const webhookPath = "/telegram-webhook";
-app.post(webhookPath, async (req, res) => {
-  try {
-    await bot.handleUpdate(req.body);
-    res.sendStatus(200);
-  } catch (err) {
-    console.error("Telegram webhook error:", err);
-    res.sendStatus(500);
-  }
-});
-
-// Register webhook with Telegram
-(async () => {
-  if (!process.env.PUBLIC_BASE_URL) {
-    console.warn("PUBLIC_BASE_URL not set; webhook may fail.");
-    return;
-  }
-  const fullWebhookUrl = `${process.env.PUBLIC_BASE_URL}${webhookPath}`;
-  try {
-    await bot.telegram.setWebhook(fullWebhookUrl);
-    console.log("Telegram webhook set to", fullWebhookUrl);
-  } catch (err) {
-    console.error("Failed to set Telegram webhook:", err);
-  }
-})();
-
-// Start server
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log("Server listening on", PORT));
