@@ -155,7 +155,7 @@ app.get("/api/user/:id", async (req, res) => {
       requestsWeek: user.requests_week,
     });
   } catch (e) {
-    console.error(e);
+    console.error("GET /api/user error:", e);
     res.status(500).json({ error: "Failed to fetch user" });
   }
 });
@@ -264,12 +264,12 @@ app.post("/api/chat", async (req, res) => {
 
     res.json({ reply });
   } catch (e) {
-    console.error(e);
+    console.error("POST /api/chat error:", e);
     res.status(500).json({ error: "Chat failed" });
   }
 });
 
-// --- Expose conversation for user-side polling ---
+// — Expose conversation for user-side polling —
 app.get("/api/conversation", async (req, res) => {
   const { userId, topic } = req.query;
   if (!userId || !topic)
@@ -302,12 +302,12 @@ app.get("/api/conversation", async (req, res) => {
 
     res.json({ conversation, messages });
   } catch (e) {
-    console.error(e);
+    console.error("GET /api/conversation error:", e);
     res.status(500).json({ error: "Fetch conversation failed" });
   }
 });
 
-// --- Admin-only endpoints ---
+// — Admin-only endpoints —
 
 // List pending payments
 app.get("/api/admin/pending-payments", async (req, res) => {
@@ -320,18 +320,65 @@ app.get("/api/admin/pending-payments", async (req, res) => {
       .from("pending_payments")
       .select("*")
       .order("created_at", { ascending: false });
-    if (error)
-      return res
-        .status(500)
-        .json({ error: "Failed to fetch pending payments" });
+    if (error) throw error;
     res.json(data);
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Internal error" });
+    console.error("GET /api/admin/pending-payments error:", e);
+    res.status(500).json({ error: "Failed to fetch pending payments" });
   }
 });
 
-// Admin fetch conversation (same as user version, but protected)
+// Approve a pending payment
+app.post("/api/admin/approve-payment", async (req, res) => {
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== process.env.ADMIN_SECRET)
+    return res.status(403).json({ error: "Forbidden" });
+
+  const { txid, admin_notes } = req.body;
+  if (!txid) return res.status(400).json({ error: "txid required" });
+
+  try {
+    const { data: pending, error: fetchErr } = await supabase
+      .from("pending_payments")
+      .select("*")
+      .eq("txid", txid)
+      .single();
+    if (fetchErr || !pending)
+      return res.status(404).json({ error: "Pending payment not found" });
+
+    // Activate the user
+    await supabase.from("users").upsert({
+      id: pending.user_id,
+      package: pending.package,
+      requests_week: 0,
+      last_request_reset: new Date().toISOString(),
+    });
+
+    // Mark payment approved
+    await supabase
+      .from("pending_payments")
+      .update({
+        status: "approved",
+        verified_at: new Date().toISOString(),
+        admin_notes: admin_notes || "Manually approved",
+      })
+      .eq("txid", txid);
+
+    // Notify user via Telegram
+    await sendTelegramMessage(
+      pending.user_id,
+      `🎉 Your *${pending.package}* plan is now active!`,
+      { parse_mode: "Markdown" }
+    );
+
+    res.json({ success: true, activated: pending.package });
+  } catch (e) {
+    console.error("POST /api/admin/approve-payment error:", e);
+    res.status(500).json({ error: "Approval failed" });
+  }
+});
+
+// Admin: fetch conversation
 app.get("/api/admin/conversation", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
   if (secret !== process.env.ADMIN_SECRET)
@@ -345,36 +392,32 @@ app.get("/api/admin/conversation", async (req, res) => {
     // fetch or create conversation
     const { data: convs } = await supabase
       .from("conversations")
-      .select("*")
+      .select("id")
       .eq("user_id", userId)
       .eq("topic", topic)
       .order("created_at", { ascending: false })
       .limit(1);
-    let conversation = convs?.[0];
-    if (!conversation) {
-      const { data: nc } = await supabase
-        .from("conversations")
-        .insert({ user_id: userId, topic })
-        .select()
-        .single();
-      conversation = nc;
+    if (!convs?.length) {
+      return res.json({ conversation: null, messages: [] });
     }
+    const conv = convs[0];
 
-    // fetch all messages
-    const { data: messages } = await supabase
+    // fetch messages
+    const { data: messages, error: msgErr } = await supabase
       .from("messages")
       .select("*")
-      .eq("conversation_id", conversation.id)
+      .eq("conversation_id", conv.id)
       .order("created_at", { ascending: true });
+    if (msgErr) throw msgErr;
 
-    res.json({ conversation, messages });
+    res.json({ conversation: conv, messages });
   } catch (e) {
-    console.error(e);
-    res.status(500).json({ error: "Internal error" });
+    console.error("GET /api/admin/conversation error:", e);
+    res.status(500).json({ error: "Failed to fetch conversation" });
   }
 });
 
-// Admin respond & notify user
+// Admin: respond & notify user
 app.post("/api/admin/respond", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
   if (secret !== process.env.ADMIN_SECRET)
@@ -388,12 +431,12 @@ app.post("/api/admin/respond", async (req, res) => {
     // fetch or create conversation
     const { data: convs } = await supabase
       .from("conversations")
-      .select("*")
+      .select("id")
       .eq("user_id", userId)
       .eq("topic", topic)
       .order("created_at", { ascending: false })
       .limit(1);
-    let conv = convs?.[0];
+    let conv = convs[0];
     if (!conv) {
       const { data: nc } = await supabase
         .from("conversations")
@@ -403,7 +446,7 @@ app.post("/api/admin/respond", async (req, res) => {
       conv = nc;
     }
 
-    // store admin message
+    // store admin reply
     await supabase.from("messages").insert({
       conversation_id: conv.id,
       role: "admin",
@@ -420,11 +463,10 @@ app.post("/api/admin/respond", async (req, res) => {
 
     res.json({ success: true });
   } catch (e) {
-    console.error(e);
+    console.error("POST /api/admin/respond error:", e);
     res.status(500).json({ error: "Respond failed" });
   }
 });
 
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log("Server listening on", PORT));
- 
