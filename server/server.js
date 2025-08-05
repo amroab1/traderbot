@@ -93,6 +93,24 @@ async function getUser(userId) {
   return upserted;
 }
 
+// Helper: calculate trial status
+function getPlanStatus(user) {
+  if (!user) return { plan: "Unknown", status: "unknown" };
+
+  if (user.package === "trial") {
+    const now = Date.now();
+    const start = new Date(user.trial_start).getTime();
+    const durationHours = +process.env.TRIAL_DURATION_HOURS || 24;
+    const elapsedHrs = (now - start) / 36e5;
+    if (elapsedHrs > durationHours) {
+      return { plan: "Trial", status: "expired" };
+    } else {
+      return { plan: "Trial", status: "active" };
+    }
+  }
+  return { plan: user.package, status: "active" };
+}
+
 // Helper: enforce weekly rate limit
 async function checkAndIncrement(userId) {
   const user = await getUser(userId);
@@ -129,27 +147,19 @@ async function checkAndIncrement(userId) {
 }
 
 // --- Public endpoints ---
-
-// Health check
 app.get("/health", (_, res) =>
   res.json({ status: "ok", time: new Date().toISOString() })
 );
 
-// Get user status
 app.get("/api/user/:id", async (req, res) => {
   try {
     const user = await getUser(req.params.id);
-    const now = Date.now();
-    const start = new Date(user.trial_start).getTime();
-    const elapsedHrs = (now - start) / 36e5;
-    const trialActive =
-      user.package === "trial" &&
-      elapsedHrs < +process.env.TRIAL_DURATION_HOURS || 24;
-    const expired = user.package === "trial" && !trialActive;
+    const { plan, status } = getPlanStatus(user);
     res.json({
-      trialActive,
-      expired,
-      package: user.package,
+      trialActive: status === "active" && plan === "Trial",
+      expired: status === "expired",
+      package: plan,
+      planStatus: status,
       requestsWeek: user.requests_week,
     });
   } catch (e) {
@@ -158,7 +168,6 @@ app.get("/api/user/:id", async (req, res) => {
   }
 });
 
-// Start trial
 app.post("/api/start-trial", async (req, res) => {
   const { userId } = req.body;
   if (!userId) return res.status(400).json({ error: "Missing userId" });
@@ -173,7 +182,6 @@ app.post("/api/start-trial", async (req, res) => {
   res.json({ success: true });
 });
 
-// Manual activation
 app.post("/api/activate", async (req, res) => {
   const { userId, package: pkg } = req.body;
   if (!userId || !pkg)
@@ -186,7 +194,6 @@ app.post("/api/activate", async (req, res) => {
   });
   res.json({ success: true });
 });
-
 // Upload image
 app.post("/api/upload", upload.single("image"), async (req, res) => {
   const { userId } = req.body;
@@ -201,22 +208,24 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
   res.json({ success: true, filename: file.filename });
 });
 
-// Main chat endpoint — AI auto-reply disabled
+// Main chat endpoint
 app.post("/api/chat", async (req, res) => {
-  const { userId, topic, message, imageDescription } = req.body;
+  const { userId, topic, message } = req.body;
   if (!userId || !topic || !message)
     return res.status(400).json({ error: "Missing fields" });
   try {
     const userRow = await getUser(userId);
-    if (userRow.package === "trial") {
-      const start = new Date(userRow.trial_start).getTime();
-      const limitMs = (+process.env.TRIAL_DURATION_HOURS || 24) * 36e5;
-      if (Date.now() - start > limitMs)
-        return res.status(403).json({ error: "Trial expired" });
+
+    // Trial expiry check
+    const { plan, status } = getPlanStatus(userRow);
+    if (plan === "Trial" && status === "expired") {
+      return res.status(403).json({ error: "Trial expired" });
     }
+
     const { allowed } = await checkAndIncrement(userId);
     if (!allowed) return res.status(429).json({ error: "Rate limit" });
 
+    // fetch or create conversation
     const { data: convs } = await supabase
       .from("conversations")
       .select("*")
@@ -235,6 +244,7 @@ app.post("/api/chat", async (req, res) => {
       conversation = nc;
     }
 
+    // store user message
     await supabase.from("messages").insert({
       conversation_id: conversation.id,
       role: "user",
@@ -242,16 +252,17 @@ app.post("/api/chat", async (req, res) => {
       image_url: null,
     });
 
-    // Instead of AI — insert placeholder
-    const placeholderReply = "🕒 A specialist will respond ASAP.";
+    // Instead of sending AI reply directly, store placeholder for admin
+    const placeholderReply =
+      "🕑 Thank you for your message. One of our specialists will reply as soon as possible.";
     await supabase.from("messages").insert({
       conversation_id: conversation.id,
-      role: "system",
+      role: "admin",
       content: placeholderReply,
       image_url: null,
     });
 
-    // Notify admin of new request
+    // Notify admin in Telegram
     if (ADMIN_TELEGRAM_ID) {
       await sendTelegramMessage(
         ADMIN_TELEGRAM_ID,
@@ -269,6 +280,7 @@ app.post("/api/chat", async (req, res) => {
     res.status(500).json({ error: "Chat failed" });
   }
 });
+
 // Expose conversation for user side
 app.get("/api/conversation", async (req, res) => {
   const { userId, topic } = req.query;
@@ -307,7 +319,6 @@ app.get("/api/conversation", async (req, res) => {
 });
 
 // --- Admin-only endpoints ---
-// List pending payments
 app.get("/api/admin/pending-payments", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
   if (secret !== process.env.ADMIN_SECRET)
@@ -317,6 +328,7 @@ app.get("/api/admin/pending-payments", async (req, res) => {
     const { data, error } = await supabase
       .from("pending_payments")
       .select("*")
+      .eq("status", "pending")
       .order("created_at", { ascending: false });
 
     if (error) throw error;
@@ -348,7 +360,6 @@ app.get("/api/admin/completed-payments", async (req, res) => {
   }
 });
 
-
 // Approve a pending payment
 app.post("/api/admin/approve-payment", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
@@ -359,16 +370,14 @@ app.post("/api/admin/approve-payment", async (req, res) => {
   if (!txid) return res.status(400).json({ error: "txid required" });
 
   try {
-    const { data: pending, error: fetchErr } = await supabase
+    const { data: pending } = await supabase
       .from("pending_payments")
       .select("*")
       .eq("txid", txid)
       .single();
 
-    if (fetchErr || !pending)
-      return res.status(404).json({ error: "Pending payment not found" });
+    if (!pending) return res.status(404).json({ error: "Pending payment not found" });
 
-    // Activate the user
     await supabase.from("users").upsert({
       id: pending.user_id,
       package: pending.package,
@@ -376,7 +385,6 @@ app.post("/api/admin/approve-payment", async (req, res) => {
       last_request_reset: new Date().toISOString(),
     });
 
-    // Mark payment approved
     await supabase
       .from("pending_payments")
       .update({
@@ -386,7 +394,6 @@ app.post("/api/admin/approve-payment", async (req, res) => {
       })
       .eq("txid", txid);
 
-    // Notify user via Telegram
     await sendTelegramMessage(
       pending.user_id,
       `🎉 Your *${pending.package}* plan is now active!`,
@@ -424,46 +431,16 @@ app.get("/api/admin/conversation", async (req, res) => {
     }
 
     const conv = convs[0];
-    const { data: messages, error: msgErr } = await supabase
+    const { data: messages } = await supabase
       .from("messages")
       .select("*")
       .eq("conversation_id", conv.id)
       .order("created_at", { ascending: true });
 
-    if (msgErr) throw msgErr;
-
     res.json({ conversation: conv, messages });
   } catch (e) {
     console.error("GET /api/admin/conversation error:", e);
     res.status(500).json({ error: "Failed to fetch conversation" });
-  }
-});
-
-/**
- * NEW: Admin generates AI draft without sending to user
- */
-app.post("/api/admin/generate-ai-draft", async (req, res) => {
-  const secret = req.headers["x-admin-secret"];
-  if (secret !== process.env.ADMIN_SECRET) {
-    return res.status(403).json({ error: "Forbidden" });
-  }
-
-  const { topic, message, imageDescription } = req.body;
-  if (!topic || !message) {
-    return res.status(400).json({ error: "Missing topic or message" });
-  }
-
-  try {
-    const messages = prompts[topic]?.(message, imageDescription || "");
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages,
-    });
-    const draft = completion.choices[0].message.content;
-    res.json({ draft });
-  } catch (e) {
-    console.error("POST /api/admin/generate-ai-draft error:", e);
-    res.status(500).json({ error: "Failed to generate draft" });
   }
 });
 
@@ -496,7 +473,6 @@ app.post("/api/admin/respond", async (req, res) => {
       conv = nc;
     }
 
-    // store admin reply
     await supabase.from("messages").insert({
       conversation_id: conv.id,
       role: "admin",
@@ -504,21 +480,18 @@ app.post("/api/admin/respond", async (req, res) => {
       is_final: !!markFinal,
     });
 
-    // 1) Nudge them to check the app
     await sendTelegramMessage(
       userId,
       `🔔 You have a new support reply. Open the app to view.`,
       { parse_mode: "Markdown" }
     );
 
-    // 2) Send actual reply text
     await sendTelegramMessage(
       userId,
       `✉️ *Support Reply*\n\n${reply}`,
       { parse_mode: "Markdown" }
     );
 
-    // 3) Send "Open App" button
     await sendTelegramMessage(
       userId,
       `Click below to view the full chat in the app:`,
