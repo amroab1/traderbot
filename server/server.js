@@ -9,7 +9,6 @@ setImmediate(() => {
     ADMIN_SECRET: !!process.env.ADMIN_SECRET,
     BOT_TOKEN: !!process.env.BOT_TOKEN,
     PUBLIC_BASE_URL: !!process.env.PUBLIC_BASE_URL,
-    ADMIN_TELEGRAM_ID: !!process.env.ADMIN_TELEGRAM_ID,
     PORT: process.env.PORT,
   });
 });
@@ -40,7 +39,6 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
 
 // Telegram helper
 const TELEGRAM_BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID; // ✅ Added admin ID
 async function sendTelegramMessage(chatId, text, options = {}) {
   if (!TELEGRAM_BOT_TOKEN || !chatId) return;
   try {
@@ -217,6 +215,7 @@ app.post("/api/chat", async (req, res) => {
     const { allowed } = await checkAndIncrement(userId);
     if (!allowed) return res.status(429).json({ error: "Rate limit" });
 
+    // fetch or create conversation
     const { data: convs } = await supabase
       .from("conversations")
       .select("*")
@@ -224,7 +223,6 @@ app.post("/api/chat", async (req, res) => {
       .eq("topic", topic)
       .order("created_at", { ascending: false })
       .limit(1);
-
     let conversation = convs?.[0];
     if (!conversation) {
       const { data: nc } = await supabase
@@ -235,6 +233,7 @@ app.post("/api/chat", async (req, res) => {
       conversation = nc;
     }
 
+    // store user message
     await supabase.from("messages").insert({
       conversation_id: conversation.id,
       role: "user",
@@ -242,6 +241,7 @@ app.post("/api/chat", async (req, res) => {
       image_url: null,
     });
 
+    // generate AI reply
     const messages = prompts[topic]?.(message, imageDescription || "");
     const completion = await openai.chat.completions.create({
       model: "gpt-4",
@@ -249,24 +249,13 @@ app.post("/api/chat", async (req, res) => {
     });
     const reply = completion.choices[0].message.content;
 
+    // store AI reply
     await supabase.from("messages").insert({
       conversation_id: conversation.id,
       role: "ai",
       content: reply,
       image_url: null,
     });
-
-    // ✅ Notify admin of new request
-    if (ADMIN_TELEGRAM_ID) {
-      await sendTelegramMessage(
-        ADMIN_TELEGRAM_ID,
-        `🆕 *New Request* from user \`${userId}\` on *${topic.replace(
-          "_",
-          " "
-        )}*:\n>${message}`,
-        { parse_mode: "Markdown" }
-      );
-    }
 
     res.json({ reply });
   } catch (e) {
@@ -288,7 +277,6 @@ app.get("/api/conversation", async (req, res) => {
       .eq("topic", topic)
       .order("created_at", { ascending: false })
       .limit(1);
-
     let conversation = convs?.[0];
     if (!conversation) {
       const { data: nc } = await supabase
@@ -298,13 +286,11 @@ app.get("/api/conversation", async (req, res) => {
         .single();
       conversation = nc;
     }
-
     const { data: messages } = await supabase
       .from("messages")
       .select("*")
       .eq("conversation_id", conversation.id)
       .order("created_at", { ascending: true });
-
     res.json({ conversation, messages });
   } catch (e) {
     console.error("GET /api/conversation error:", e);
@@ -312,7 +298,8 @@ app.get("/api/conversation", async (req, res) => {
   }
 });
 
-// --- Admin-only endpoints ---
+// Admin-only endpoints
+
 // List pending payments
 app.get("/api/admin/pending-payments", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
@@ -324,7 +311,6 @@ app.get("/api/admin/pending-payments", async (req, res) => {
       .from("pending_payments")
       .select("*")
       .order("created_at", { ascending: false });
-
     if (error) throw error;
     res.json(data);
   } catch (e) {
@@ -348,7 +334,6 @@ app.post("/api/admin/approve-payment", async (req, res) => {
       .select("*")
       .eq("txid", txid)
       .single();
-
     if (fetchErr || !pending)
       return res.status(404).json({ error: "Pending payment not found" });
 
@@ -402,20 +387,16 @@ app.get("/api/admin/conversation", async (req, res) => {
       .eq("topic", topic)
       .order("created_at", { ascending: false })
       .limit(1);
-
     if (!convs?.length) {
       return res.json({ conversation: null, messages: [] });
     }
-
     const conv = convs[0];
     const { data: messages, error: msgErr } = await supabase
       .from("messages")
       .select("*")
       .eq("conversation_id", conv.id)
       .order("created_at", { ascending: true });
-
     if (msgErr) throw msgErr;
-
     res.json({ conversation: conv, messages });
   } catch (e) {
     console.error("GET /api/admin/conversation error:", e);
@@ -423,7 +404,7 @@ app.get("/api/admin/conversation", async (req, res) => {
   }
 });
 
-// Admin: respond & notify user with nudge + reply + open app button
+// Admin: respond & notify user with “Open App” button
 app.post("/api/admin/respond", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
   if (secret !== process.env.ADMIN_SECRET)
@@ -441,7 +422,6 @@ app.post("/api/admin/respond", async (req, res) => {
       .eq("topic", topic)
       .order("created_at", { ascending: false })
       .limit(1);
-
     let conv = convs[0];
     if (!conv) {
       const { data: nc } = await supabase
@@ -460,24 +440,10 @@ app.post("/api/admin/respond", async (req, res) => {
       is_final: !!markFinal,
     });
 
-    // 1) Nudge them to check the app
+    // notify via Telegram with “Open App” button
     await sendTelegramMessage(
       userId,
-      `🔔 You have a new support reply. Open the app to view.`,
-      { parse_mode: "Markdown" }
-    );
-
-    // 2) Optional: send the actual reply text
-    await sendTelegramMessage(
-      userId,
-      `✉️ *Support Reply*\n\n${reply}`,
-      { parse_mode: "Markdown" }
-    );
-
-    // 3) Send "Open App" button
-    await sendTelegramMessage(
-      userId,
-      `Click below to view the full chat in the app:`,
+      `✉️ *Support Reply*\n\n${reply}\n\nClick below to view full chat in the app:`,
       {
         parse_mode: "Markdown",
         reply_markup: JSON.stringify({
