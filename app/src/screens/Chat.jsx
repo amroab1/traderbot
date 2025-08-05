@@ -280,7 +280,7 @@ export default function Chat({
                 color: "#fff",
               }}
             >
-              {m.role === "ai" ? "AI" : "You"}
+              {m.role === "user" ? "You" : "Admin"}
             </div>
             <div
               style={{
