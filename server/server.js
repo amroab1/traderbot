@@ -327,6 +327,28 @@ app.get("/api/admin/pending-payments", async (req, res) => {
   }
 });
 
+// Completed payments list
+app.get("/api/admin/completed-payments", async (req, res) => {
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== process.env.ADMIN_SECRET)
+    return res.status(403).json({ error: "Forbidden" });
+
+  try {
+    const { data, error } = await supabase
+      .from("pending_payments")
+      .select("*")
+      .eq("status", "approved")
+      .order("verified_at", { ascending: false });
+
+    if (error) throw error;
+    res.json(data);
+  } catch (e) {
+    console.error("GET /api/admin/completed-payments error:", e);
+    res.status(500).json({ error: "Failed to fetch completed payments" });
+  }
+});
+
+
 // Approve a pending payment
 app.post("/api/admin/approve-payment", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
