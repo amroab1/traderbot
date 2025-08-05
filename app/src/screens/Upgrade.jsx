@@ -1,8 +1,10 @@
 // app/src/screens/Upgrade.jsx
 import React, { useState, useEffect } from "react";
-import { activatePackage } from "../api.js"; // if still needed elsewhere
+import { activatePackage } from "../api.js"; // still available if needed elsewhere
 
-const API_BASE = import.meta.env.VITE_API_URL || "https://server-production-dd28.up.railway.app";
+const API_BASE =
+  import.meta.env.VITE_API_URL ||
+  "https://server-production-dd28.up.railway.app";
 
 export default function Upgrade({ userId, status, onActivated }) {
   const [selectedPlan, setSelectedPlan] = useState("Starter");
@@ -27,7 +29,11 @@ export default function Upgrade({ userId, status, onActivated }) {
     (async () => {
       if (!userId) return;
       try {
-        const res = await fetch(`${API_BASE}/api/pending-payment?userId=${encodeURIComponent(userId)}`);
+        const res = await fetch(
+          `${API_BASE}/api/pending-payment?userId=${encodeURIComponent(
+            userId
+          )}`
+        );
         if (res.ok) {
           const p = await res.json();
           if (p && p.txid) {
@@ -75,10 +81,12 @@ export default function Upgrade({ userId, status, onActivated }) {
         }),
       });
       const data = await res.json();
-      if (res.ok) {
-        setMessage("✅ Payment submitted. Awaiting verification. You’ll be notified when approved.");
+      if (res.ok && data.success) {
+        setMessage(
+          "✅ Payment submitted. Awaiting verification. You’ll be notified when approved."
+        );
       } else {
-        setMessage(data.error || "Failed to submit payment. Please try again or contact support.");
+        setMessage(data.error || "Failed to submit payment. Please try again.");
       }
     } catch (e) {
       console.error("Submit payment error:", e);
@@ -114,7 +122,8 @@ export default function Upgrade({ userId, status, onActivated }) {
             onClick={() => setSelectedPlan(plan)}
             style={{
               flex: "1 1 200px",
-              border: selectedPlan === plan ? "2px solid #6c63ff" : "1px solid #444",
+              border:
+                selectedPlan === plan ? "2px solid #6c63ff" : "1px solid #444",
               padding: 16,
               borderRadius: 8,
               cursor: "pointer",
@@ -152,8 +161,8 @@ export default function Upgrade({ userId, status, onActivated }) {
       </div>
 
       <div style={{ marginBottom: 12 }}>
-        <p>
-          <strong>Payment method:</strong> USDT (TRC20) on TRON network. Send the amount for{" "}
+        <p style={{ marginBottom: 4 }}>
+          <strong>Payment method:</strong> USDT (TRC20). Send {planPrices[selectedPlan]} for{" "}
           <strong>{selectedPlan}</strong> to:
         </p>
         <code
@@ -169,7 +178,9 @@ export default function Upgrade({ userId, status, onActivated }) {
         >
           TE6cbin6JJ5EFVFBso6stgV9HM6X2wRgrP
         </code>
-        <p>After sending payment, paste the transaction hash (TXID) below for verification.</p>
+        <p style={{ marginBottom: 8 }}>
+          After sending payment, paste the transaction hash (TXID) below for verification.
+        </p>
 
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
           <input
@@ -199,17 +210,17 @@ export default function Upgrade({ userId, status, onActivated }) {
               minWidth: 180,
             }}
           >
-            {submitting ? "Submitting..." : `Submit Payment for ${selectedPlan}`}
+            {submitting
+              ? "Submitting..."
+              : `Submit Payment for ${selectedPlan}`}
           </button>
         </div>
       </div>
 
       <div>
         <p>
-          Once verified manually by admin, your plan will be activated and your access restored.
-        </p>
-        <p>
-          Need help? Contact support: <strong>@LiveTradeDM</strong>
+          Once verified by admin, you’ll regain access. Need help? Contact{" "}
+          <strong>@LiveTradeDM</strong>
         </p>
       </div>
 
@@ -227,7 +238,9 @@ export default function Upgrade({ userId, status, onActivated }) {
         </div>
       )}
 
-      {loadingExisting && <div style={{ marginTop: 8 }}>Loading previous submission...</div>}
+      {loadingExisting && (
+        <div style={{ marginTop: 8 }}>Loading previous submission...</div>
+      )}
     </div>
   );
 }
