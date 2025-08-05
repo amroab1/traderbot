@@ -478,6 +478,65 @@ app.get("/api/admin/conversation", async (req, res) => {
   }
 });
 
+// Admin: generate AI draft for a user's conversation
+app.post("/api/admin/generate-ai-draft", async (req, res) => {
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  const { userId, topic } = req.body;
+  if (!userId || !topic) {
+    return res.status(400).json({ error: "Missing userId or topic" });
+  }
+
+  try {
+    // Get the latest conversation context
+    const { data: convs } = await supabase
+      .from("conversations")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("topic", topic)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (!convs?.length) {
+      return res.json({ draft: "No conversation history available." });
+    }
+
+    const conv = convs[0];
+    const { data: messages } = await supabase
+      .from("messages")
+      .select("role, content")
+      .eq("conversation_id", conv.id)
+      .order("created_at", { ascending: true });
+
+    // Build AI prompt
+    const systemPrompt = {
+      role: "system",
+      content:
+        "You are a trading support assistant. Generate a helpful, clear, and concise reply for the user based on the conversation history. Do not include greetings or sign-offs."
+    };
+
+    const conversationMessages = messages.map(m => ({
+      role: m.role === "user" ? "user" : "assistant",
+      content: m.content
+    }));
+
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4",
+      messages: [systemPrompt, ...conversationMessages]
+    });
+
+    const draft = completion.choices[0].message.content || "";
+    res.json({ draft });
+  } catch (err) {
+    console.error("generate-ai-draft error:", err);
+    res.status(500).json({ error: "Failed to generate AI draft" });
+  }
+});
+
+
 // Admin: respond & notify user
 app.post("/api/admin/respond", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
