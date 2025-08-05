@@ -217,7 +217,6 @@ app.post("/api/chat", async (req, res) => {
     const { allowed } = await checkAndIncrement(userId);
     if (!allowed) return res.status(429).json({ error: "Rate limit" });
 
-    // fetch or create conversation
     const { data: convs } = await supabase
       .from("conversations")
       .select("*")
@@ -225,6 +224,7 @@ app.post("/api/chat", async (req, res) => {
       .eq("topic", topic)
       .order("created_at", { ascending: false })
       .limit(1);
+
     let conversation = convs?.[0];
     if (!conversation) {
       const { data: nc } = await supabase
@@ -235,7 +235,6 @@ app.post("/api/chat", async (req, res) => {
       conversation = nc;
     }
 
-    // store user message
     await supabase.from("messages").insert({
       conversation_id: conversation.id,
       role: "user",
@@ -243,7 +242,6 @@ app.post("/api/chat", async (req, res) => {
       image_url: null,
     });
 
-    // generate AI reply
     const messages = prompts[topic]?.(message, imageDescription || "");
     const completion = await openai.chat.completions.create({
       model: "gpt-4",
@@ -251,7 +249,6 @@ app.post("/api/chat", async (req, res) => {
     });
     const reply = completion.choices[0].message.content;
 
-    // store AI reply
     await supabase.from("messages").insert({
       conversation_id: conversation.id,
       role: "ai",
@@ -259,7 +256,7 @@ app.post("/api/chat", async (req, res) => {
       image_url: null,
     });
 
-    // ✅ Send alert to admin
+    // ✅ Notify admin of new request
     if (ADMIN_TELEGRAM_ID) {
       await sendTelegramMessage(
         ADMIN_TELEGRAM_ID,
@@ -291,6 +288,7 @@ app.get("/api/conversation", async (req, res) => {
       .eq("topic", topic)
       .order("created_at", { ascending: false })
       .limit(1);
+
     let conversation = convs?.[0];
     if (!conversation) {
       const { data: nc } = await supabase
@@ -300,11 +298,13 @@ app.get("/api/conversation", async (req, res) => {
         .single();
       conversation = nc;
     }
+
     const { data: messages } = await supabase
       .from("messages")
       .select("*")
       .eq("conversation_id", conversation.id)
       .order("created_at", { ascending: true });
+
     res.json({ conversation, messages });
   } catch (e) {
     console.error("GET /api/conversation error:", e);
@@ -312,9 +312,118 @@ app.get("/api/conversation", async (req, res) => {
   }
 });
 
-// Admin-only endpoints...
+// --- Admin-only endpoints ---
+// List pending payments
+app.get("/api/admin/pending-payments", async (req, res) => {
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== process.env.ADMIN_SECRET)
+    return res.status(403).json({ error: "Forbidden" });
 
-// Admin: respond & notify user with nudge + reply
+  try {
+    const { data, error } = await supabase
+      .from("pending_payments")
+      .select("*")
+      .order("created_at", { ascending: false });
+
+    if (error) throw error;
+    res.json(data);
+  } catch (e) {
+    console.error("GET /api/admin/pending-payments error:", e);
+    res.status(500).json({ error: "Failed to fetch pending payments" });
+  }
+});
+
+// Approve a pending payment
+app.post("/api/admin/approve-payment", async (req, res) => {
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== process.env.ADMIN_SECRET)
+    return res.status(403).json({ error: "Forbidden" });
+
+  const { txid, admin_notes } = req.body;
+  if (!txid) return res.status(400).json({ error: "txid required" });
+
+  try {
+    const { data: pending, error: fetchErr } = await supabase
+      .from("pending_payments")
+      .select("*")
+      .eq("txid", txid)
+      .single();
+
+    if (fetchErr || !pending)
+      return res.status(404).json({ error: "Pending payment not found" });
+
+    // Activate the user
+    await supabase.from("users").upsert({
+      id: pending.user_id,
+      package: pending.package,
+      requests_week: 0,
+      last_request_reset: new Date().toISOString(),
+    });
+
+    // Mark payment approved
+    await supabase
+      .from("pending_payments")
+      .update({
+        status: "approved",
+        verified_at: new Date().toISOString(),
+        admin_notes: admin_notes || "Manually approved",
+      })
+      .eq("txid", txid);
+
+    // Notify user via Telegram
+    await sendTelegramMessage(
+      pending.user_id,
+      `🎉 Your *${pending.package}* plan is now active!`,
+      { parse_mode: "Markdown" }
+    );
+
+    res.json({ success: true, activated: pending.package });
+  } catch (e) {
+    console.error("POST /api/admin/approve-payment error:", e);
+    res.status(500).json({ error: "Approval failed" });
+  }
+});
+
+// Fetch conversation as admin
+app.get("/api/admin/conversation", async (req, res) => {
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== process.env.ADMIN_SECRET)
+    return res.status(403).json({ error: "Forbidden" });
+
+  const { userId, topic } = req.query;
+  if (!userId || !topic)
+    return res.status(400).json({ error: "userId and topic required" });
+
+  try {
+    const { data: convs } = await supabase
+      .from("conversations")
+      .select("id")
+      .eq("user_id", userId)
+      .eq("topic", topic)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (!convs?.length) {
+      return res.json({ conversation: null, messages: [] });
+    }
+
+    const conv = convs[0];
+    const { data: messages, error: msgErr } = await supabase
+      .from("messages")
+      .select("*")
+      .eq("conversation_id", conv.id)
+      .order("created_at", { ascending: true });
+
+    if (msgErr) throw msgErr;
+
+    res.json({ conversation: conv, messages });
+  } catch (e) {
+    console.error("GET /api/admin/conversation error:", e);
+    res.status(500).json({ error: "Failed to fetch conversation" });
+  }
+});
+
+// Admin: respond & notify user with nudge + reply + open app button
 app.post("/api/admin/respond", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
   if (secret !== process.env.ADMIN_SECRET)
@@ -332,6 +441,7 @@ app.post("/api/admin/respond", async (req, res) => {
       .eq("topic", topic)
       .order("created_at", { ascending: false })
       .limit(1);
+
     let conv = convs[0];
     if (!conv) {
       const { data: nc } = await supabase
@@ -350,18 +460,37 @@ app.post("/api/admin/respond", async (req, res) => {
       is_final: !!markFinal,
     });
 
-    // ✅ 1) Tell them they have a new in-app message
+    // 1) Nudge them to check the app
     await sendTelegramMessage(
       userId,
       `🔔 You have a new support reply. Open the app to view.`,
       { parse_mode: "Markdown" }
     );
 
-    // ✅ 2) Also send the full reply text
+    // 2) Optional: send the actual reply text
     await sendTelegramMessage(
       userId,
       `✉️ *Support Reply*\n\n${reply}`,
       { parse_mode: "Markdown" }
+    );
+
+    // 3) Send "Open App" button
+    await sendTelegramMessage(
+      userId,
+      `Click below to view the full chat in the app:`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: JSON.stringify({
+          inline_keyboard: [
+            [
+              {
+                text: "💬 Open Support App",
+                web_app: { url: process.env.PUBLIC_BASE_URL }
+              }
+            ]
+          ]
+        })
+      }
     );
 
     res.json({ success: true });
