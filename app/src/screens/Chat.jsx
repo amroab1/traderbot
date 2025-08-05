@@ -260,7 +260,7 @@ export default function Chat({
             key={i}
             style={{
               display: "flex",
-              flexDirection: m.role === "user" ? "row" : "row-reverse",
+              flexDirection: m.role === "user" ? "row-reverse" : "row",
               gap: 12,
               alignItems: "flex-start",
             }}
