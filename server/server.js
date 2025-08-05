@@ -40,7 +40,7 @@ const openai = new OpenAI({ apiKey: process.env.OPENAI_KEY });
 
 // Telegram helper
 const TELEGRAM_BOT_TOKEN = process.env.BOT_TOKEN;
-const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID; // ✅ Added admin ID
+const ADMIN_TELEGRAM_ID = process.env.ADMIN_TELEGRAM_ID;
 async function sendTelegramMessage(chatId, text, options = {}) {
   if (!TELEGRAM_BOT_TOKEN || !chatId) return;
   try {
@@ -201,6 +201,37 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
   res.json({ success: true, filename: file.filename });
 });
 
+// ✅ New endpoint: Submit payment
+app.post("/api/submit-payment", async (req, res) => {
+  const { userId, package: pkg, txid } = req.body;
+  if (!userId || !pkg || !txid) {
+    return res.status(400).json({ error: "Missing userId, package, or txid" });
+  }
+  try {
+    const { error } = await supabase.from("pending_payments").insert({
+      user_id: userId,
+      package: pkg,
+      txid,
+      status: "pending",
+      created_at: new Date().toISOString(),
+    });
+    if (error) throw error;
+
+    if (ADMIN_TELEGRAM_ID) {
+      await sendTelegramMessage(
+        ADMIN_TELEGRAM_ID,
+        `💰 *New Payment Submitted*\n\nUser: \`${userId}\`\nPackage: *${pkg}*\nTXID: \`${txid}\``,
+        { parse_mode: "Markdown" }
+      );
+    }
+
+    res.json({ success: true });
+  } catch (err) {
+    console.error("POST /api/submit-payment error:", err);
+    res.status(500).json({ error: "Failed to submit payment" });
+  }
+});
+
 // Main chat endpoint
 app.post("/api/chat", async (req, res) => {
   const { userId, topic, message, imageDescription } = req.body;
@@ -256,7 +287,6 @@ app.post("/api/chat", async (req, res) => {
       image_url: null,
     });
 
-    // ✅ Notify admin of new request
     if (ADMIN_TELEGRAM_ID) {
       await sendTelegramMessage(
         ADMIN_TELEGRAM_ID,
@@ -313,6 +343,7 @@ app.get("/api/conversation", async (req, res) => {
 });
 
 // --- Admin-only endpoints ---
+
 // List pending payments
 app.get("/api/admin/pending-payments", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
@@ -423,7 +454,7 @@ app.get("/api/admin/conversation", async (req, res) => {
   }
 });
 
-// Admin: respond & notify user with nudge + reply + open app button
+// Admin: respond & notify user
 app.post("/api/admin/respond", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
   if (secret !== process.env.ADMIN_SECRET)
@@ -460,21 +491,21 @@ app.post("/api/admin/respond", async (req, res) => {
       is_final: !!markFinal,
     });
 
-    // 1) Nudge them to check the app
+    // Nudge user to check the app
     await sendTelegramMessage(
       userId,
       `🔔 You have a new support reply. Open the app to view.`,
       { parse_mode: "Markdown" }
     );
 
-    // 2) Optional: send the actual reply text
+    // Send the actual reply
     await sendTelegramMessage(
       userId,
       `✉️ *Support Reply*\n\n${reply}`,
       { parse_mode: "Markdown" }
     );
 
-    // 3) Send "Open App" button
+    // Send "Open App" button
     await sendTelegramMessage(
       userId,
       `Click below to view the full chat in the app:`,
