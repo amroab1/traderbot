@@ -407,6 +407,40 @@ app.post("/api/admin/approve-payment", async (req, res) => {
   }
 });
 
+
+// List all users with conversations (including trial, expired, active)
+app.get("/api/admin/users-with-conversations", async (req, res) => {
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== process.env.ADMIN_SECRET)
+    return res.status(403).json({ error: "Forbidden" });
+
+  try {
+    const { data, error } = await supabase
+      .from("users")
+      .select("id, package, trial_start, last_request_reset")
+      .order("trial_start", { ascending: false });
+
+    if (error) throw error;
+
+    // mark expired vs active
+    const now = Date.now();
+    const trialDuration = (+process.env.TRIAL_DURATION_HOURS || 24) * 36e5;
+    const users = data.map(u => {
+      let status = "active";
+      if (u.package === "trial" && now - new Date(u.trial_start).getTime() > trialDuration) {
+        status = "expired";
+      }
+      return { ...u, status };
+    });
+
+    res.json(users);
+  } catch (e) {
+    console.error("GET /api/admin/users-with-conversations error:", e);
+    res.status(500).json({ error: "Failed to fetch users" });
+  }
+});
+
+
 // Fetch conversation as admin
 app.get("/api/admin/conversation", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
