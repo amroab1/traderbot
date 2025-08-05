@@ -201,38 +201,7 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
   res.json({ success: true, filename: file.filename });
 });
 
-// ✅ New endpoint: Submit payment
-app.post("/api/submit-payment", async (req, res) => {
-  const { userId, package: pkg, txid } = req.body;
-  if (!userId || !pkg || !txid) {
-    return res.status(400).json({ error: "Missing userId, package, or txid" });
-  }
-  try {
-    const { error } = await supabase.from("pending_payments").insert({
-      user_id: userId,
-      package: pkg,
-      txid,
-      status: "pending",
-      created_at: new Date().toISOString(),
-    });
-    if (error) throw error;
-
-    if (ADMIN_TELEGRAM_ID) {
-      await sendTelegramMessage(
-        ADMIN_TELEGRAM_ID,
-        `💰 *New Payment Submitted*\n\nUser: \`${userId}\`\nPackage: *${pkg}*\nTXID: \`${txid}\``,
-        { parse_mode: "Markdown" }
-      );
-    }
-
-    res.json({ success: true });
-  } catch (err) {
-    console.error("POST /api/submit-payment error:", err);
-    res.status(500).json({ error: "Failed to submit payment" });
-  }
-});
-
-// Main chat endpoint
+// Main chat endpoint — AI auto-reply disabled
 app.post("/api/chat", async (req, res) => {
   const { userId, topic, message, imageDescription } = req.body;
   if (!userId || !topic || !message)
@@ -273,20 +242,16 @@ app.post("/api/chat", async (req, res) => {
       image_url: null,
     });
 
-    const messages = prompts[topic]?.(message, imageDescription || "");
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages,
-    });
-    const reply = completion.choices[0].message.content;
-
+    // Instead of AI — insert placeholder
+    const placeholderReply = "🕒 A specialist will respond ASAP.";
     await supabase.from("messages").insert({
       conversation_id: conversation.id,
-      role: "ai",
-      content: reply,
+      role: "system",
+      content: placeholderReply,
       image_url: null,
     });
 
+    // Notify admin of new request
     if (ADMIN_TELEGRAM_ID) {
       await sendTelegramMessage(
         ADMIN_TELEGRAM_ID,
@@ -298,13 +263,12 @@ app.post("/api/chat", async (req, res) => {
       );
     }
 
-    res.json({ reply });
+    res.json({ reply: placeholderReply });
   } catch (e) {
     console.error("POST /api/chat error:", e);
     res.status(500).json({ error: "Chat failed" });
   }
 });
-
 // Expose conversation for user side
 app.get("/api/conversation", async (req, res) => {
   const { userId, topic } = req.query;
@@ -343,7 +307,6 @@ app.get("/api/conversation", async (req, res) => {
 });
 
 // --- Admin-only endpoints ---
-
 // List pending payments
 app.get("/api/admin/pending-payments", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
@@ -454,6 +417,34 @@ app.get("/api/admin/conversation", async (req, res) => {
   }
 });
 
+/**
+ * NEW: Admin generates AI draft without sending to user
+ */
+app.post("/api/admin/generate-ai-draft", async (req, res) => {
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== process.env.ADMIN_SECRET) {
+    return res.status(403).json({ error: "Forbidden" });
+  }
+
+  const { topic, message, imageDescription } = req.body;
+  if (!topic || !message) {
+    return res.status(400).json({ error: "Missing topic or message" });
+  }
+
+  try {
+    const messages = prompts[topic]?.(message, imageDescription || "");
+    const completion = await openai.chat.completions.create({
+      model: "gpt-4",
+      messages,
+    });
+    const draft = completion.choices[0].message.content;
+    res.json({ draft });
+  } catch (e) {
+    console.error("POST /api/admin/generate-ai-draft error:", e);
+    res.status(500).json({ error: "Failed to generate draft" });
+  }
+});
+
 // Admin: respond & notify user
 app.post("/api/admin/respond", async (req, res) => {
   const secret = req.headers["x-admin-secret"];
@@ -491,21 +482,21 @@ app.post("/api/admin/respond", async (req, res) => {
       is_final: !!markFinal,
     });
 
-    // Nudge user to check the app
+    // 1) Nudge them to check the app
     await sendTelegramMessage(
       userId,
       `🔔 You have a new support reply. Open the app to view.`,
       { parse_mode: "Markdown" }
     );
 
-    // Send the actual reply
+    // 2) Send actual reply text
     await sendTelegramMessage(
       userId,
       `✉️ *Support Reply*\n\n${reply}`,
       { parse_mode: "Markdown" }
     );
 
-    // Send "Open App" button
+    // 3) Send "Open App" button
     await sendTelegramMessage(
       userId,
       `Click below to view the full chat in the app:`,
