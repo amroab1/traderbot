@@ -109,12 +109,12 @@ export default function Chat({
   }, [status]);
 
   // 7) Auto-scroll
-  useEffect(() => {
-    scrollRef.current?.scrollTo({
-      top: scrollRef.current.scrollHeight,
-      behavior: "smooth",
-    });
-  }, [history]);
+  //useEffect(() => {
+   // scrollRef.current?.scrollTo({
+     // top: scrollRef.current.scrollHeight,
+    //  behavior: "smooth",
+    //});
+  //}, [history]);
 
   // File attach
   const handleAttach = (e) => {
