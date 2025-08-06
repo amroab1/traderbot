@@ -567,7 +567,7 @@ app.post("/api/admin/generate-ai-draft", async (req, res) => {
   }
 
   try {
-    // Get the latest conversation context
+    // Get latest conversation
     const { data: convs } = await supabase
       .from("conversations")
       .select("id")
@@ -581,36 +581,80 @@ app.post("/api/admin/generate-ai-draft", async (req, res) => {
     }
 
     const conv = convs[0];
+
+    // Fetch messages
     const { data: messages } = await supabase
       .from("messages")
-      .select("role, content")
+      .select("*")
       .eq("conversation_id", conv.id)
       .order("created_at", { ascending: true });
 
-    // Build AI prompt
-    const systemPrompt = {
-      role: "system",
-      content:
-        "You are a trading support assistant. Generate a helpful, clear, and concise reply for the user based on the conversation history. Do not include greetings or sign-offs."
-    };
+    if (!messages?.length) {
+      return res.status(404).json({ error: "No messages found." });
+    }
 
-    const conversationMessages = messages.map(m => ({
-      role: m.role === "user" ? "user" : "assistant",
-      content: m.content
-    }));
+    // Get the last user message
+    const lastUserMsg = [...messages].reverse().find((m) => m.role === "user");
 
-    const completion = await openai.chat.completions.create({
-      model: "gpt-4",
-      messages: [systemPrompt, ...conversationMessages]
-    });
+    if (!lastUserMsg) {
+      return res.status(404).json({ error: "No user message found." });
+    }
 
-    const draft = completion.choices[0].message.content || "";
+    let completion;
+
+    // GPT-4 Vision if image_url present
+    if (lastUserMsg.image_url) {
+      completion = await openai.chat.completions.create({
+        model: "gpt-4-vision-preview",
+        messages: [
+          {
+            role: "user",
+            content: [
+              {
+                type: "text",
+                text:
+                  "Analyze this trading chart and provide insight or feedback. The user also wrote:\n\n" +
+                  (lastUserMsg.content || ""),
+              },
+              {
+                type: "image_url",
+                image_url: {
+                  url: lastUserMsg.image_url,
+                },
+              },
+            ],
+          },
+        ],
+        max_tokens: 1000,
+      });
+    } else {
+      // Regular GPT-4 text completion
+      const systemPrompt = {
+        role: "system",
+        content:
+          "You are a trading support assistant. Generate a helpful, concise reply for the user based on the conversation history. Do not include greetings or sign-offs.",
+      };
+
+      const conversationMessages = messages.map((m) => ({
+        role: m.role === "user" ? "user" : "assistant",
+        content: m.content,
+      }));
+
+      completion = await openai.chat.completions.create({
+        model: "gpt-4",
+        messages: [systemPrompt, ...conversationMessages],
+        max_tokens: 1000,
+      });
+    }
+
+    const draft = completion.choices?.[0]?.message?.content || "";
     res.json({ draft });
   } catch (err) {
     console.error("generate-ai-draft error:", err);
     res.status(500).json({ error: "Failed to generate AI draft" });
   }
 });
+
 
 
 // Admin: respond & notify user
