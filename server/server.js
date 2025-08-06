@@ -196,19 +196,61 @@ app.post("/api/activate", async (req, res) => {
   });
   res.json({ success: true });
 });
-// Upload image
+
+// Upload image to Supabase Storage
 app.post("/api/upload", upload.single("image"), async (req, res) => {
   const { userId } = req.body;
   const file = req.file;
-  if (!userId || !file)
+
+  if (!userId || !file) {
     return res.status(400).json({ error: "Missing userId or image" });
-  await supabase.from("images").insert({
-    user_id: userId,
-    file_path: file.filename,
-    uploaded_at: new Date().toISOString(),
-  });
-  res.json({ success: true, filename: file.filename });
+  }
+
+  try {
+    const fileExt = path.extname(file.originalname);
+    const fileName = `${Date.now()}_${Math.random().toString(36).substring(2)}${fileExt}`;
+    const filePath = `${userId}/${fileName}`;
+
+    // Upload file to Supabase Storage
+    const { error: uploadError } = await supabase.storage
+      .from("chat-uploads") // ✅ bucket name in Supabase
+      .upload(filePath, fs.createReadStream(file.path), {
+        cacheControl: "3600",
+        upsert: false,
+        contentType: file.mimetype
+      });
+
+    if (uploadError) {
+      console.error("Supabase upload error:", uploadError);
+      return res.status(500).json({ error: "Failed to upload to storage" });
+    }
+
+    // Get public URL
+    const { data: publicData } = supabase.storage
+      .from("chat-uploads")
+      .getPublicUrl(filePath);
+
+    // Save to DB
+    await supabase.from("images").insert({
+      user_id: userId,
+      file_path: publicData.publicUrl, // store the public URL
+      uploaded_at: new Date().toISOString(),
+    });
+
+    // Remove local temp file
+    fs.unlinkSync(file.path);
+
+    res.json({
+      success: true,
+      filename: filePath,
+      publicUrl: publicData.publicUrl
+    });
+  } catch (err) {
+    console.error("Upload error:", err);
+    res.status(500).json({ error: "Upload failed" });
+  }
 });
+
 
 // Main chat endpoint
 app.post("/api/chat", async (req, res) => {

@@ -148,7 +148,7 @@ const handleSend = async () => {
       form.append("image", image);
       form.append("userId", userId);
       const up = await uploadImage(form);
-      imageFilename = up.data.filename || "";
+      imageFilename = up.data.publicUrl || "";
     }
 
     const res = await chat({
@@ -303,7 +303,7 @@ const handleSend = async () => {
               {m.image && (
                 <div style={{ marginTop: 8 }}>
                   <img
-                    src={m.image}
+                    src={`${API_BASE}/uploads/${m.image}`} // ✅ backend hosted image
                     alt="uploaded"
                     style={{
                       maxWidth: "100%",
