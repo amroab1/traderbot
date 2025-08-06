@@ -140,7 +140,7 @@ const handleSend = async () => {
   ]);
   setInput("");
 
-  let imageFilename = ""; // ✅ define once here
+  let imageUrl = ""; // ✅ now clearly named
 
   const doChatRequest = async () => {
     if (image) {
@@ -148,14 +148,14 @@ const handleSend = async () => {
       form.append("image", image);
       form.append("userId", userId);
       const up = await uploadImage(form);
-      imageFilename = up.data.publicUrl || "";
+      imageUrl = up.data.publicUrl || ""; // ✅ Supabase public URL
     }
 
     const res = await chat({
       userId,
       topic,
       message: userMessage,
-      imageFilename, // ✅ send correct filename
+      imageUrl, // ✅ send correct property name
     });
 
     if (res.data?.error) throw new Error(res.data.error);
@@ -178,6 +178,7 @@ const handleSend = async () => {
     if (onStatusRefresh) onStatusRefresh();
   }
 };
+
 
 
   return (

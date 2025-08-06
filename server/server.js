@@ -293,7 +293,7 @@ app.post("/api/chat", async (req, res) => {
       conversation_id: conversation.id,
       role: "user",
       content: message,
-      image_url: req.body.imageFilename || null, // store uploaded filename if present
+      image_url: req.body.imageUrl || null, // ✅ matches new name
     });
 
     // Instead of sending AI reply directly, store placeholder for admin
