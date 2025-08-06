@@ -123,62 +123,62 @@ export default function Chat({
     }
   };
 
-  // Send message + retry, then rely on poll to get both AI & admin replies
-  const handleSend = async () => {
-    if (!input.trim() && !image) return;
-    setError(null);
-    setSending(true);
+ // Send message + retry, then rely on poll to get both AI & admin replies
+const handleSend = async () => {
+  if (!input.trim() && !image) return;
+  setError(null);
+  setSending(true);
 
-    const userMessage = input.trim() || "(image only)";
-    setHistory((h) => [
-      ...h,
-      {
-        role: "user",
-        text: userMessage,
-        image: image ? URL.createObjectURL(image) : null,
-      },
-    ]);
-    setInput("");
+  const userMessage = input.trim() || "(image only)";
+  setHistory((h) => [
+    ...h,
+    {
+      role: "user",
+      text: userMessage,
+      image: image ? URL.createObjectURL(image) : null,
+    },
+  ]);
+  setInput("");
 
-    let imageFilename = "";
-    const doChatRequest = async () => {
-      let imageFilename = ""; // ✅ make sure it's defined
-    
-      if (image) {
-          const form = new FormData();
-          form.append("image", image);
-       form.append("userId", userId);
-       const up = await uploadImage(form);
+  let imageFilename = ""; // ✅ define once here
+
+  const doChatRequest = async () => {
+    if (image) {
+      const form = new FormData();
+      form.append("image", image);
+      form.append("userId", userId);
+      const up = await uploadImage(form);
       imageFilename = up.data.filename || "";
-      }
-    
-      const res = await chat({
-        userId,
-        topic,
-        message: userMessage,
-        imageFilename, // ✅ send filename in API body
-      });
-    
-      if (res.data?.error) throw new Error(res.data.error);
-    };
+    }
 
+    const res = await chat({
+      userId,
+      topic,
+      message: userMessage,
+      imageFilename, // ✅ send correct filename
+    });
+
+    if (res.data?.error) throw new Error(res.data.error);
+  };
+
+  try {
+    await doChatRequest();
+  } catch (firstErr) {
+    console.warn("First attempt failed:", firstErr);
+    await new Promise((r) => setTimeout(r, 500));
     try {
       await doChatRequest();
-    } catch (firstErr) {
-      console.warn("First attempt failed:", firstErr);
-      await new Promise((r) => setTimeout(r, 500));
-      try {
-        await doChatRequest();
-      } catch (secondErr) {
-        console.error("Second attempt failed:", secondErr);
-        setError(secondErr.message || "Failed to send. Try again.");
-      }
-    } finally {
-      setSending(false);
-      setImage(null);
-      if (onStatusRefresh) onStatusRefresh();
+    } catch (secondErr) {
+      console.error("Second attempt failed:", secondErr);
+      setError(secondErr.message || "Failed to send. Try again.");
     }
-  };
+  } finally {
+    setSending(false);
+    setImage(null);
+    if (onStatusRefresh) onStatusRefresh();
+  }
+};
+
 
   return (
     <div
