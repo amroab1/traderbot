@@ -297,35 +297,8 @@ app.post("/api/chat", async (req, res) => {
       image_url: imageUrl || null,
     });
 
-    // 🧠 If image is present, generate AI-based draft (as admin reply)
+    // 🧠 Skip AI generation for image uploads — handled manually in admin panel
     let aiReply = null;
-    if (imageUrl) {
-      try {
-        const aiRes = await openai.chat.completions.create({
-          model: "gpt-4o",
-          messages: [
-            {
-              role: "system",
-              content:
-                "You are a professional trading analyst. Analyze the user’s chart image and message to give relevant, insightful, and actionable feedback. Focus only on what’s visible in the chart. Do not mention that you are AI or describe unrelated concepts.",
-            },
-            {
-              role: "user",
-              content: [
-                { type: "text", text: message },
-                { type: "image_url", image_url: { url: imageUrl } },
-              ],
-            },
-          ],
-          max_tokens: 800,
-        });
-
-        aiReply = aiRes.choices?.[0]?.message?.content || null;
-      } catch (err) {
-        console.error("AI generation failed", err.message);
-        aiReply = null;
-      }
-    }
 
     // Store admin reply — either with AI draft or placeholder
     await supabase.from("messages").insert({
