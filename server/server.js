@@ -302,7 +302,7 @@ app.post("/api/chat", async (req, res) => {
     if (imageUrl) {
       try {
         const aiRes = await openai.chat.completions.create({
-          model: "gpt-4-vision-preview",
+          model: "gpt-4o",
           messages: [
             {
               role: "system",
@@ -605,7 +605,7 @@ app.post("/api/admin/generate-ai-draft", async (req, res) => {
     // GPT-4 Vision if image_url present
     if (lastUserMsg.image_url) {
       completion = await openai.chat.completions.create({
-        model: "gpt-4-vision-preview",
+        model: "gpt-4o",
         messages: [
           {
             role: "user",
