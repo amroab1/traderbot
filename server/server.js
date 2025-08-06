@@ -307,7 +307,7 @@ app.post("/api/chat", async (req, res) => {
             {
               role: "system",
               content:
-                "You are a professional trading assistant. Provide a brief, helpful, and professional reply to the user's message and image. Be concise. Do not mention you are AI.",
+                "You are a professional trading analyst. Analyze the user’s chart image and message to give relevant, insightful, and actionable feedback. Focus only on what’s visible in the chart. Do not mention that you are AI or describe unrelated concepts.",
             },
             {
               role: "user",
@@ -637,11 +637,11 @@ app.post("/api/admin/generate-ai-draft", async (req, res) => {
 
       const conversationMessages = messages.map((m) => ({
         role: m.role === "user" ? "user" : "assistant",
-        content: m.content,
+        content: m.content + (m.image_url ? `\n\nAttached chart: ${m.image_url}` : ""),
       }));
 
       completion = await openai.chat.completions.create({
-        model: "gpt-4",
+        model: "gpt-4o",
         messages: [systemPrompt, ...conversationMessages],
         max_tokens: 1000,
       });

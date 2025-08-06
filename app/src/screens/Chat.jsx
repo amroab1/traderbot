@@ -123,62 +123,51 @@ export default function Chat({
     }
   };
 
- // Send message + retry, then rely on poll to get both AI & admin replies
-const handleSend = async () => {
-  if (!input.trim() && !image) return;
-  setError(null);
-  setSending(true);
-
-  const userMessage = input.trim() || "(image only)";
-  setHistory((h) => [
-    ...h,
-    {
-      role: "user",
-      text: userMessage,
-      image: image ? URL.createObjectURL(image) : null,
-    },
-  ]);
-  setInput("");
-
-  let imageUrl = ""; // ✅ now clearly named
-
-  const doChatRequest = async () => {
-    if (image) {
-      const form = new FormData();
-      form.append("image", image);
-      form.append("userId", userId);
-      const up = await uploadImage(form);
-      imageUrl = up.data.publicUrl || ""; // ✅ Supabase public URL
-    }
-
-    const res = await chat({
-      userId,
-      topic,
-      message: userMessage,
-      imageUrl, // ✅ send correct property name
-    });
-
-    if (res.data?.error) throw new Error(res.data.error);
-  };
-
-  try {
-    await doChatRequest();
-  } catch (firstErr) {
-    console.warn("First attempt failed:", firstErr);
-    await new Promise((r) => setTimeout(r, 500));
+  const handleSend = async () => {
+    if (!input.trim() && !image) return;
+    setError(null);
+    setSending(true);
+  
+    const userMessage = input.trim() || "(image only)";
+    setHistory((h) => [
+      ...h,
+      {
+        role: "user",
+        text: userMessage,
+        image: image ? URL.createObjectURL(image) : null,
+      },
+    ]);
+    setInput("");
+  
+    let imageUrl = "";
+  
     try {
-      await doChatRequest();
-    } catch (secondErr) {
-      console.error("Second attempt failed:", secondErr);
-      setError(secondErr.message || "Failed to send. Try again.");
+      if (image) {
+        const form = new FormData();
+        form.append("image", image);
+        form.append("userId", userId);
+        const up = await uploadImage(form);
+        imageUrl = up.data.publicUrl || "";
+      }
+  
+      const res = await chat({
+        userId,
+        topic,
+        message: userMessage,
+        imageUrl,
+      });
+  
+      if (res.data?.error) throw new Error(res.data.error);
+    } catch (err) {
+      console.error("Send failed:", err);
+      setError(err.message || "Failed to send. Try again.");
+    } finally {
+      setSending(false);
+      setImage(null);
+      if (onStatusRefresh) onStatusRefresh();
     }
-  } finally {
-    setSending(false);
-    setImage(null);
-    if (onStatusRefresh) onStatusRefresh();
-  }
-};
-
+  };
+  
 
 
   return (
