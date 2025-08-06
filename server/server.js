@@ -254,14 +254,15 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
 
 // Main chat endpoint
 app.post("/api/chat", async (req, res) => {
-  const { userId, topic, message } = req.body;
-  if (!userId || !topic || !message)
+  const { userId, topic, message, imageUrl } = req.body;
+  if (!userId || !topic || !message) {
     return res.status(400).json({ error: "Missing fields" });
+  }
+
   try {
     const userRow = await getUser(userId);
-
-    // Trial expiry check
     const { plan, status } = getPlanStatus(userRow);
+
     if (plan === "Trial" && status === "expired") {
       return res.status(403).json({ error: "Trial expired" });
     }
@@ -293,18 +294,49 @@ app.post("/api/chat", async (req, res) => {
       conversation_id: conversation.id,
       role: "user",
       content: message,
-      image_url: req.body.imageUrl || null, // ✅ matches new name
+      image_url: imageUrl || null,
     });
 
-    // Instead of sending AI reply directly, store placeholder for admin
-    const placeholderReply =
-      "🕑 Thank you for your message. One of our specialists will reply as soon as possible.";
+    // 🧠 If image is present, generate AI-based draft (as admin reply)
+    let aiReply = null;
+    if (imageUrl) {
+      try {
+        const aiRes = await openai.chat.completions.create({
+          model: "gpt-4-vision-preview",
+          messages: [
+            {
+              role: "system",
+              content:
+                "You are a professional trading assistant. Provide a brief, helpful, and professional reply to the user's message and image. Be concise. Do not mention you are AI.",
+            },
+            {
+              role: "user",
+              content: [
+                { type: "text", text: message },
+                { type: "image_url", image_url: { url: imageUrl } },
+              ],
+            },
+          ],
+          max_tokens: 800,
+        });
+
+        aiReply = aiRes.choices?.[0]?.message?.content || null;
+      } catch (err) {
+        console.error("AI generation failed", err.message);
+        aiReply = null;
+      }
+    }
+
+    // Store admin reply — either with AI draft or placeholder
     await supabase.from("messages").insert({
       conversation_id: conversation.id,
       role: "admin",
-      content: placeholderReply,
+      content:
+        aiReply ||
+        "🕑 Thank you for your message. One of our specialists will reply as soon as possible.",
       image_url: null,
     });
+
 
     // Notify admin in Telegram
     if (ADMIN_TELEGRAM_ID) {
