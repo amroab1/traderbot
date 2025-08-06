@@ -323,7 +323,9 @@ app.post("/api/chat", async (req, res) => {
       );
     }
 
-    res.json({ reply: placeholderReply });
+    res.json({
+      reply: aiReply || "🕑 Thank you for your message. One of our specialists will reply as soon as possible.",
+    });
   } catch (e) {
     console.error("POST /api/chat error:", e);
     res.status(500).json({ error: "Chat failed" });
