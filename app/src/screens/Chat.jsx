@@ -142,19 +142,23 @@ export default function Chat({
 
     let imageFilename = "";
     const doChatRequest = async () => {
+      let imageFilename = ""; // ✅ make sure it's defined
+    
       if (image) {
-        const form = new FormData();
-        form.append("image", image);
-        form.append("userId", userId);
-        const up = await uploadImage(form);
-        imageFilename = up.data.filename || "";
+          const form = new FormData();
+          form.append("image", image);
+       form.append("userId", userId);
+       const up = await uploadImage(form);
+      imageFilename = up.data.filename || "";
       }
+    
       const res = await chat({
         userId,
         topic,
         message: userMessage,
-        imageFilename,
+        imageFilename, // ✅ send filename in API body
       });
+    
       if (res.data?.error) throw new Error(res.data.error);
     };
 
