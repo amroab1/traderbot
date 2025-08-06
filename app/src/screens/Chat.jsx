@@ -304,7 +304,7 @@ const handleSend = async () => {
               {m.image && (
                 <div style={{ marginTop: 8 }}>
                   <img
-                    src={`${API_BASE}/uploads/${m.image}`} // ✅ backend hosted image
+                    src={m.image} // ✅ already a full public URL
                     alt="uploaded"
                     style={{
                       maxWidth: "100%",
