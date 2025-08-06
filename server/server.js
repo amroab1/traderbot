@@ -28,6 +28,8 @@ const prompts = require("./prompts");
 const app = express();
 app.use(cors({ origin: true, credentials: true }));
 app.use(bodyParser.json());
+// Serve uploaded files so they are accessible in the browser
+app.use("/uploads", express.static(path.join(__dirname, "uploads")));
 
 // Supabase client
 const supabase = createClient(
@@ -249,7 +251,7 @@ app.post("/api/chat", async (req, res) => {
       conversation_id: conversation.id,
       role: "user",
       content: message,
-      image_url: null,
+      image_url: imageFilename || null, // store uploaded filename if present
     });
 
     // Instead of sending AI reply directly, store placeholder for admin
