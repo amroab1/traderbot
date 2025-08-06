@@ -123,7 +123,7 @@ export default function Chat({
     }
   };
 
-// Send message + retry, then rely on poll to get both AI & admin replies
+ // Send message + retry, then rely on poll to get both AI & admin replies
 const handleSend = async () => {
   if (!input.trim() && !image) return;
   setError(null);
@@ -140,28 +140,22 @@ const handleSend = async () => {
   ]);
   setInput("");
 
-  let imageFilename = "";
+  let imageUrl = ""; // ✅ now clearly named
 
   const doChatRequest = async () => {
     if (image) {
       const form = new FormData();
       form.append("image", image);
       form.append("userId", userId);
-
-      // Upload to Supabase and get public URL
       const up = await uploadImage(form);
-      if (up.data?.publicUrl) {
-        imageFilename = up.data.publicUrl; // ✅ store public URL, not local file path
-      } else if (up.data?.filename) {
-        imageFilename = up.data.filename;
-      }
+      imageUrl = up.data.publicUrl || ""; // ✅ Supabase public URL
     }
 
     const res = await chat({
       userId,
       topic,
       message: userMessage,
-      imageFilename, // ✅ send correct public URL
+      imageUrl, // ✅ send correct property name
     });
 
     if (res.data?.error) throw new Error(res.data.error);
@@ -184,7 +178,6 @@ const handleSend = async () => {
     if (onStatusRefresh) onStatusRefresh();
   }
 };
-
 
 
 
