@@ -197,7 +197,6 @@ app.post("/api/activate", async (req, res) => {
   res.json({ success: true });
 });
 
-// Upload image to Supabase Storage
 app.post("/api/upload", upload.single("image"), async (req, res) => {
   const { userId } = req.body;
   const file = req.file;
@@ -213,8 +212,8 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
 
     // Upload file to Supabase Storage
     const { error: uploadError } = await supabase.storage
-      .from("chat-uploads") // ✅ bucket name in Supabase
-      .upload(filePath, fs.createReadStream(file.path), {
+      .from("chat-uploads") // change to your bucket name if different
+      .upload(filePath, fs.readFileSync(file.path), {
         cacheControl: "3600",
         upsert: false,
         contentType: file.mimetype
@@ -233,11 +232,11 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
     // Save to DB
     await supabase.from("images").insert({
       user_id: userId,
-      file_path: publicData.publicUrl, // store the public URL
+      file_path: publicData.publicUrl,
       uploaded_at: new Date().toISOString(),
     });
 
-    // Remove local temp file
+    // Clean up temp file
     fs.unlinkSync(file.path);
 
     res.json({
@@ -250,6 +249,7 @@ app.post("/api/upload", upload.single("image"), async (req, res) => {
     res.status(500).json({ error: "Upload failed" });
   }
 });
+
 
 
 // Main chat endpoint
