@@ -650,7 +650,8 @@ app.post("/api/admin/generate-ai-draft", async (req, res) => {
     const draft = completion.choices?.[0]?.message?.content || "";
     res.json({ draft });
   } catch (err) {
-    console.error("generate-ai-draft error:", err);
+    console.error("❌ generate-ai-draft error:", err.message);
+    console.error(err.stack); // 👈 add this
     res.status(500).json({ error: "Failed to generate AI draft" });
   }
 });
