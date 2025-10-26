@@ -191,45 +191,67 @@ export default function Menu({ status, onSelectTopic }) {
           marginTop: 10,
         }}
       >
-        {[
-          { key: "trade_setup", label: "📉 Trade Setup Review" },
-          { key: "account_health", label: "📊 Account Health Check" },
-          { key: "psychology", label: "🧠 Psychology Support" },
-          { key: "funded_account", label: "🏆 Funded Account Advice" },
-          { key: "margin_call", label: "⚠️ Margin Call Emergency" },
-        ].map((item) => (
-          <button
-            key={item.key}
-            onClick={() => onSelectTopic(item.key)}
-            style={{
-              padding: "16px 20px",
-              borderRadius: 12,
-              border: "none",
-              cursor: "pointer",
-              background: "#1f2255",
-              color: "#fff",
-              fontSize: 16,
-              fontWeight: 600,
-              display: "flex",
-              alignItems: "center",
-              gap: 12,
-              boxShadow: "0 20px 60px -10px rgba(108,99,255,0.2)",
-              transition: "transform .15s ease, background .2s ease",
-              width: "100%",
-            }}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.transform = "scale(1.02)";
-              e.currentTarget.style.background = "#2a2f7f";
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.transform = "scale(1)";
-              e.currentTarget.style.background = "#1f2255";
-            }}
-          >
-            <span style={{ flex: 1, textAlign: "left" }}>{item.label}</span>
-            <span style={{ fontSize: 18, opacity: 0.9 }}>→</span>
-          </button>
-        ))}
+        <button
+          onClick={() => onSelectTopic("trade_setup")}
+          style={{
+            padding: "16px 20px",
+            borderRadius: 12,
+            border: "none",
+            cursor: "pointer",
+            background: "#1f2255",
+            color: "#fff",
+            fontSize: 16,
+            fontWeight: 600,
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            boxShadow: "0 20px 60px -10px rgba(108,99,255,0.2)",
+            transition: "transform .15s ease, background .2s ease",
+            width: "100%",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.transform = "scale(1.02)";
+            e.currentTarget.style.background = "#2a2f7f";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.transform = "scale(1)";
+            e.currentTarget.style.background = "#1f2255";
+          }}
+        >
+          <span style={{ flex: 1, textAlign: "left" }}>📉 Trade Setup Review</span>
+          <span style={{ fontSize: 18, opacity: 0.9 }}>→</span>
+        </button>
+
+        <button
+          onClick={() => onSelectTopic("emergency_support")}
+          style={{
+            padding: "16px 20px",
+            borderRadius: 12,
+            border: "none",
+            cursor: "pointer",
+            background: "#dc2626",
+            color: "#fff",
+            fontSize: 16,
+            fontWeight: 600,
+            display: "flex",
+            alignItems: "center",
+            gap: 12,
+            boxShadow: "0 20px 60px -10px rgba(220,38,38,0.3)",
+            transition: "transform .15s ease, background .2s ease",
+            width: "100%",
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.transform = "scale(1.02)";
+            e.currentTarget.style.background = "#b91c1c";
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.transform = "scale(1)";
+            e.currentTarget.style.background = "#dc2626";
+          }}
+        >
+          <span style={{ flex: 1, textAlign: "left" }}>🚨 Emergency Support</span>
+          <span style={{ fontSize: 18, opacity: 0.9 }}>→</span>
+        </button>
       </div>
     </div>
   );
