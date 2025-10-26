@@ -6,21 +6,14 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 // /start
 bot.start((ctx) => {
   ctx.reply(
-    "👋 Welcome to Forex AI Support\n\nWe can help you with:\n\nStart your FREE TRIAL 3 days or upgrade to PRO plan for 30 days with no sending limits.",
+    "👋 Welcome to Forex AI Support\n\nWe can help you with:\n📉 Trade Setup Review\n📊 Account Health Check\n🧠 Psychology Support\n🏆 Funded Account Advice\n⚠️ Margin Call Emergency\n\nStart your free 1-day trial inside the app.",
     {
       reply_markup: {
         inline_keyboard: [
           [
             {
-              text: "🚨 EMERGENCY 911 ONE TO ONE",
-              callback_data: "emergency",
-              pay: true // This adds a red background
-            }
-          ],
-          [
-            {
-              text: "📊 ACCOUNT HEALTH CHECK",
-              callback_data: "health_check"
+              text: "🚀 Open App",
+              web_app: { url: "https://traderbot-inky.vercel.app/" }
             }
           ]
         ]
@@ -43,22 +36,6 @@ bot.command("activated", (ctx) => {
     `User ${userId} has been manually activated via subscription.`
   );
   ctx.reply("Your access has been activated. You can now use the services.");
-});
-
-// Handle emergency button
-bot.action('emergency', (ctx) => {
-  const userId = ctx.from.id;
-  notifyAdmin(
-    bot,
-    process.env.ADMIN_TELEGRAM_ID,
-    `⚠️ EMERGENCY: User ${userId} needs immediate one-to-one assistance!`
-  );
-  ctx.reply("Your emergency request has been sent to our team. Someone will contact you shortly.");
-});
-
-// Handle account health check button
-bot.action('health_check', (ctx) => {
-  ctx.reply("We'll analyze your account health. Please provide your recent trading statistics or screenshots to get started.");
 });
 
 bot.launch();

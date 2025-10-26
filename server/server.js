@@ -102,12 +102,12 @@ function getPlanStatus(user) {
   if (user.package === "trial") {
     const now = Date.now();
     const start = new Date(user.trial_start).getTime();
-    const durationDays = 3; // FREE TRIAL 3 days
-    const elapsedDays = (now - start) / (24 * 36e5);
-    if (elapsedDays > durationDays) {
-      return { plan: "FREE TRIAL", status: "expired" };
+    const durationHours = +process.env.TRIAL_DURATION_HOURS || 24;
+    const elapsedHrs = (now - start) / 36e5;
+    if (elapsedHrs > durationHours) {
+      return { plan: "Trial", status: "expired" };
     } else {
-      return { plan: "FREE TRIAL", status: "active" };
+      return { plan: "Trial", status: "active" };
     }
   }
   return { plan: user.package, status: "active" };
@@ -127,14 +127,17 @@ async function checkAndIncrement(userId) {
   }
   let limit = 0;
   switch (user.package) {
+    case "Elite":
+      limit = Infinity;
+      break;
     case "Pro":
-      limit = Infinity; // PRO plan for 30 days with no sending limits
+      limit = +process.env.PRO_WEEKLY_LIMIT || 10;
+      break;
+    case "Starter":
+      limit = +process.env.STARTER_WEEKLY_LIMIT || 5;
       break;
     case "trial":
-      limit = Infinity; // FREE TRIAL 3 days with unlimited messages
-      break;
-    default:
-      limit = 5; // Default limit
+      limit = +process.env.STARTER_WEEKLY_LIMIT || 5;
       break;
   }
   if (user.requests_week >= limit) return { allowed: false, limit };
