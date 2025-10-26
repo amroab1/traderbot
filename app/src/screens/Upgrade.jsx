@@ -14,7 +14,7 @@ export default function Upgrade({ userId, status, onActivated }) {
   const [loadingExisting, setLoadingExisting] = useState(true);
 
   const planPrices = {
-    Pro: "$349",
+    Pro: "$149",
   };
 
   // Load persisted selection & pending payment

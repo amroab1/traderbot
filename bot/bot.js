@@ -6,7 +6,7 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 // /start
 bot.start((ctx) => {
   ctx.reply(
-    "👋 Welcome to Forex AI Support\n\nWe can help you with:\n\nStart your FREE TRIAL 3 days or upgrade to PRO plan for 30 days ($349).",
+    "👋 Welcome to Forex AI Support\n\nWe can help you with:\n\nStart your FREE TRIAL 3 days or upgrade to PRO plan for 30 days with no sending limits.",
     {
       reply_markup: {
         inline_keyboard: [
@@ -21,12 +21,6 @@ bot.start((ctx) => {
             {
               text: "📊 ACCOUNT HEALTH CHECK",
               callback_data: "health_check"
-            }
-          ],
-          [
-            {
-              text: "🚀 Open App",
-              url: "https://traderbot-app.vercel.app"
             }
           ]
         ]
