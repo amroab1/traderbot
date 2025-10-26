@@ -7,16 +7,14 @@ const API_BASE =
   "https://server-production-dd28.up.railway.app";
 
 export default function Upgrade({ userId, status, onActivated }) {
-  const [selectedPlan, setSelectedPlan] = useState("Starter");
+  const [selectedPlan, setSelectedPlan] = useState("Pro");
   const [txid, setTxid] = useState("");
   const [message, setMessage] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [loadingExisting, setLoadingExisting] = useState(true);
 
   const planPrices = {
-    Starter: "$49",
-    Pro: "$119",
-    Elite: "$299",
+    Pro: "$149",
   };
 
   // Load persisted selection & pending payment
@@ -116,48 +114,40 @@ export default function Upgrade({ userId, status, onActivated }) {
       </p>
 
       <div style={{ display: "flex", gap: 16, flexWrap: "wrap", marginBottom: 20 }}>
-        {["Starter", "Pro", "Elite"].map((plan) => (
+        <div
+          onClick={() => setSelectedPlan("Pro")}
+          style={{
+            flex: "1 1 200px",
+            border: "2px solid #6c63ff",
+            padding: 16,
+            borderRadius: 8,
+            cursor: "pointer",
+            background: "#1f1b44",
+            position: "relative",
+            minWidth: 160,
+          }}
+        >
+          <h3 style={{ marginTop: 0, color: "#fff" }}>
+            PRO Plan – {planPrices["Pro"]}
+          </h3>
+          <p style={{ margin: 0, color: "#ddd" }}>
+            30 days with no sending limits
+          </p>
           <div
-            key={plan}
-            onClick={() => setSelectedPlan(plan)}
             style={{
-              flex: "1 1 200px",
-              border:
-                selectedPlan === plan ? "2px solid #6c63ff" : "1px solid #444",
-              padding: 16,
-              borderRadius: 8,
-              cursor: "pointer",
-              background: selectedPlan === plan ? "#1f1b44" : "#1c1f38",
-              position: "relative",
-              minWidth: 160,
+              position: "absolute",
+              top: 8,
+              right: 8,
+              background: "#6c63ff",
+              padding: "4px 8px",
+              borderRadius: 999,
+              fontSize: 12,
+              color: "#fff",
             }}
           >
-            <h3 style={{ marginTop: 0, color: "#fff" }}>
-              {plan} – {planPrices[plan]}
-            </h3>
-            <p style={{ margin: 0, color: "#ddd" }}>
-              {plan === "Starter" && "5 requests/week"}
-              {plan === "Pro" && "10 requests/week + priority"}
-              {plan === "Elite" && "Unlimited access + live call"}
-            </p>
-            {selectedPlan === plan && (
-              <div
-                style={{
-                  position: "absolute",
-                  top: 8,
-                  right: 8,
-                  background: "#6c63ff",
-                  padding: "4px 8px",
-                  borderRadius: 999,
-                  fontSize: 12,
-                  color: "#fff",
-                }}
-              >
-                Selected
-              </div>
-            )}
+            Selected
           </div>
-        ))}
+        </div>
       </div>
 
       <div style={{ marginBottom: 12 }}>

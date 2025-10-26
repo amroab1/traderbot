@@ -6,10 +6,8 @@ import Chat from "./screens/Chat.jsx";
 import Upgrade from "./screens/Upgrade.jsx";
 
 const LIMITS = {
-  trial: 5,
-  Starter: 5,
-  Pro: 10,
-  Elite: Infinity,
+  trial: Infinity, // FREE TRIAL 3 days with unlimited messages
+  Pro: Infinity, // PRO plan for 30 days with no sending limits
 };
 
 export default function App() {
@@ -131,8 +129,8 @@ export default function App() {
   if (status.package === "trial" && !status.trialActive) {
     return (
       <div style={{ padding: 20 }}>
-        <h1>Free 1-Day Trial</h1>
-        <p>Activate your trial to access services.</p>
+        <h1>FREE TRIAL 3 days</h1>
+              <p>Activate your trial to access services.</p>
         <button
           onClick={async () => {
             await startTrial(userId);

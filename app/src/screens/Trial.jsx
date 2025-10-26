@@ -9,7 +9,7 @@ export default function Trial({ user, setTrialActive }) {
 
   return (
     <div>
-      <h2>🎁 Start your free 1-day trial</h2>
+      <h2>🎁 Start your FREE TRIAL 3 days with unlimited messages</h2>
       <p>Get full access to support for 24 hours.</p>
       <button onClick={handleStart}>Start Trial</button>
     </div>

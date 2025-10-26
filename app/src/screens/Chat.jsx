@@ -96,11 +96,9 @@ export default function Chat({
   useEffect(() => {
     if (!status) return;
     const limits = {
-      trial: parseInt(import.meta.env.VITE_STARTER_WEEKLY_LIMIT || "5", 10),
-      Starter: parseInt(import.meta.env.VITE_STARTER_WEEKLY_LIMIT || "5", 10),
-      Pro: parseInt(import.meta.env.VITE_PRO_WEEKLY_LIMIT || "10", 10),
-      Elite: Infinity,
-    };
+  trial: Infinity, // FREE TRIAL 3 days with unlimited messages
+  Pro: Infinity, // PRO plan for 30 days with no sending limits
+};
     const limit = limits[status.package] ?? 0;
     setUsageInfo({ used: status.requestsWeek, limit });
     if (limit !== Infinity && status.requestsWeek >= limit && onLimitExceeded) {
@@ -476,7 +474,7 @@ export default function Chat({
 
         <div style={{ fontSize: 12, opacity: 0.75, marginTop: 4 }}>
           {status?.package} plan • Used {status?.requestsWeek} /{" "}
-          {status?.package === "Elite" ? "∞" : `${usageInfo?.used} / ${usageInfo?.limit}`}
+              {status?.package === "Pro" ? "∞" : `${usageInfo?.used} / ${usageInfo?.limit}`}
         </div>
       </div>
     </div>

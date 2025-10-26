@@ -2,10 +2,8 @@
 import React from "react";
 
 const LIMITS = {
-  trial: 5,
-  Starter: 5,
-  Pro: 10,
-  Elite: Infinity,
+  trial: Infinity, // FREE TRIAL 3 days with unlimited messages
+  Pro: Infinity, // PRO plan for 30 days with no sending limits
 };
 
 export default function Menu({ status, onSelectTopic }) {
