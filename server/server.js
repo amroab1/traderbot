@@ -102,7 +102,7 @@ function getPlanStatus(user) {
   if (user.package === "trial") {
     const now = Date.now();
     const start = new Date(user.trial_start).getTime();
-    const durationHours = +process.env.TRIAL_DURATION_HOURS || 24;
+    const durationHours = +process.env.TRIAL_DURATION_HOURS || 72;
     const elapsedHrs = (now - start) / 36e5;
     if (elapsedHrs > durationHours) {
       return { plan: "Trial", status: "expired" };
@@ -130,14 +130,8 @@ async function checkAndIncrement(userId) {
     case "Elite":
       limit = Infinity;
       break;
-    case "Pro":
-      limit = +process.env.PRO_WEEKLY_LIMIT || 10;
-      break;
-    case "Starter":
-      limit = +process.env.STARTER_WEEKLY_LIMIT || 5;
-      break;
     case "trial":
-      limit = +process.env.STARTER_WEEKLY_LIMIT || 5;
+      limit = 15;
       break;
   }
   if (user.requests_week >= limit) return { allowed: false, limit };
@@ -475,7 +469,7 @@ app.get("/api/admin/users-with-conversations", async (req, res) => {
 
     // mark expired vs active
     const now = Date.now();
-    const trialDuration = (+process.env.TRIAL_DURATION_HOURS || 24) * 36e5;
+    const trialDuration = (+process.env.TRIAL_DURATION_HOURS || 72) * 36e5;
     const users = data.map(u => {
       let status = "active";
       if (u.package === "trial" && now - new Date(u.trial_start).getTime() > trialDuration) {

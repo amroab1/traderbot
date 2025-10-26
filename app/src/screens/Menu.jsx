@@ -2,9 +2,7 @@
 import React from "react";
 
 const LIMITS = {
-  trial: 5,
-  Starter: 5,
-  Pro: 10,
+  trial: 15,
   Elite: Infinity,
 };
 
