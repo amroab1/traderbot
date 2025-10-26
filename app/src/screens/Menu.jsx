@@ -15,7 +15,13 @@ export default function Menu({ status, onSelectTopic }) {
 
   // Format package expiry countdown
   const formatExpiry = (packageExpiry) => {
-    if (!packageExpiry) return null;
+    if (!packageExpiry) {
+      // For testing - show a countdown even if no packageExpiry data
+      if (status.package === "Elite") {
+        return { text: "30 days left", color: "#00d084", urgent: false };
+      }
+      return null;
+    }
     
     if (packageExpiry.isExpired) {
       return { text: "Expired", color: "#ff6b6b", urgent: true };
@@ -29,6 +35,11 @@ export default function Menu({ status, onSelectTopic }) {
   };
 
   const expiryInfo = formatExpiry(status.packageExpiry);
+  
+  // Debug logging
+  console.log("Menu status:", status);
+  console.log("Package expiry:", status.packageExpiry);
+  console.log("Expiry info:", expiryInfo);
 
   return (
     <div

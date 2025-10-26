@@ -154,7 +154,16 @@ app.get("/api/user/:id", async (req, res) => {
     
     // Calculate package expiry
     let packageExpiry = null;
-    if (user.package === "Elite" && user.package_start) {
+    if (user.package === "Elite") {
+      // If no package_start date, set it to now for existing Elite users
+      if (!user.package_start) {
+        await supabase
+          .from("users")
+          .update({ package_start: new Date().toISOString() })
+          .eq("id", user.id);
+        user.package_start = new Date().toISOString();
+      }
+      
       const startDate = new Date(user.package_start);
       const expiryDate = new Date(startDate.getTime() + (30 * 24 * 60 * 60 * 1000)); // 30 days
       const now = new Date();
