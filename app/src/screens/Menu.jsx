@@ -13,6 +13,23 @@ export default function Menu({ status, onSelectTopic }) {
   const usedPercent =
     limit === Infinity ? 0 : Math.min(Math.round((used / limit) * 100), 100);
 
+  // Format package expiry countdown
+  const formatExpiry = (packageExpiry) => {
+    if (!packageExpiry) return null;
+    
+    if (packageExpiry.isExpired) {
+      return { text: "Expired", color: "#ff6b6b", urgent: true };
+    } else if (packageExpiry.daysLeft <= 3) {
+      return { text: `${packageExpiry.daysLeft} days left`, color: "#ffa500", urgent: true };
+    } else if (packageExpiry.daysLeft <= 7) {
+      return { text: `${packageExpiry.daysLeft} days left`, color: "#ffa500", urgent: false };
+    } else {
+      return { text: `${packageExpiry.daysLeft} days left`, color: "#00d084", urgent: false };
+    }
+  };
+
+  const expiryInfo = formatExpiry(status.packageExpiry);
+
   return (
     <div
       style={{
@@ -66,6 +83,22 @@ export default function Menu({ status, onSelectTopic }) {
                 <div style={{ fontSize: 20, fontWeight: 600 }}>
                   {status.package}
                 </div>
+                {expiryInfo && (
+                  <div 
+                    style={{ 
+                      fontSize: 12, 
+                      marginTop: 4,
+                      color: expiryInfo.color,
+                      fontWeight: 600,
+                      display: "flex",
+                      alignItems: "center",
+                      gap: 4
+                    }}
+                  >
+                    {expiryInfo.urgent && "⚠️ "}
+                    {expiryInfo.text}
+                  </div>
+                )}
               </div>
               <div
                 style={{

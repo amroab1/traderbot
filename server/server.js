@@ -151,12 +151,28 @@ app.get("/api/user/:id", async (req, res) => {
   try {
     const user = await getUser(req.params.id);
     const { plan, status } = getPlanStatus(user);
+    
+    // Calculate package expiry
+    let packageExpiry = null;
+    if (user.package === "Elite" && user.package_start) {
+      const startDate = new Date(user.package_start);
+      const expiryDate = new Date(startDate.getTime() + (30 * 24 * 60 * 60 * 1000)); // 30 days
+      const now = new Date();
+      const daysLeft = Math.ceil((expiryDate.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+      packageExpiry = {
+        daysLeft: Math.max(0, daysLeft),
+        expiryDate: expiryDate.toISOString(),
+        isExpired: daysLeft <= 0
+      };
+    }
+    
     res.json({
       trialActive: status === "active" && plan === "Trial",
       expired: status === "expired",
       package: plan,
       planStatus: status,
       requestsWeek: user.requests_week,
+      packageExpiry: packageExpiry,
     });
   } catch (e) {
     console.error("GET /api/user error:", e);
@@ -495,6 +511,7 @@ app.post("/api/admin/approve-payment", async (req, res) => {
     await supabase.from("users").upsert({
       id: pending.user_id,
       package: pending.package,
+      package_start: new Date().toISOString(),
       requests_week: 0,
       last_request_reset: new Date().toISOString(),
     });
