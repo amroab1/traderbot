@@ -191,6 +191,75 @@ app.post("/api/activate", async (req, res) => {
   res.json({ success: true });
 });
 
+// Submit payment for verification
+app.post("/api/submit-payment", async (req, res) => {
+  const { userId, package: pkg, txid } = req.body;
+  if (!userId || !pkg || !txid) {
+    return res.status(400).json({ error: "Missing required fields" });
+  }
+
+  try {
+    // Check if payment already exists
+    const { data: existing } = await supabase
+      .from("pending_payments")
+      .select("*")
+      .eq("txid", txid)
+      .single();
+
+    if (existing) {
+      return res.status(400).json({ error: "Payment already submitted" });
+    }
+
+    // Create new pending payment
+    const { data, error } = await supabase
+      .from("pending_payments")
+      .insert({
+        user_id: userId,
+        package: pkg,
+        txid: txid.trim(),
+        status: "pending",
+        created_at: new Date().toISOString(),
+      })
+      .select()
+      .single();
+
+    if (error) throw error;
+
+    res.json({ success: true, payment: data });
+  } catch (e) {
+    console.error("POST /api/submit-payment error:", e);
+    res.status(500).json({ error: "Failed to submit payment" });
+  }
+});
+
+// Check pending payment status
+app.get("/api/pending-payment", async (req, res) => {
+  const { userId } = req.query;
+  if (!userId) {
+    return res.status(400).json({ error: "Missing userId" });
+  }
+
+  try {
+    const { data, error } = await supabase
+      .from("pending_payments")
+      .select("*")
+      .eq("user_id", userId)
+      .order("created_at", { ascending: false })
+      .limit(1);
+
+    if (error) throw error;
+
+    if (!data || data.length === 0) {
+      return res.json(null);
+    }
+
+    res.json(data[0]);
+  } catch (e) {
+    console.error("GET /api/pending-payment error:", e);
+    res.status(500).json({ error: "Failed to fetch pending payment" });
+  }
+});
+
 app.post("/api/upload", upload.single("image"), async (req, res) => {
   const { userId } = req.body;
   const file = req.file;
