@@ -73,6 +73,7 @@ export default function App() {
     const limit = LIMITS[status.package] ?? 0;
     if (
       (status.package === "trial" && status.expired) ||
+      (status.package === "Elite" && status.packageExpiry && status.packageExpiry.isExpired) ||
       (limit !== Infinity && status.requestsWeek >= limit)
     ) {
       setShowUpgrade(true);

@@ -6,7 +6,7 @@ const bot = new Telegraf(process.env.BOT_TOKEN);
 // /start
 bot.start((ctx) => {
   ctx.reply(
-    "👋 Welcome to Forex AI Support\n\nWe can help you with:\n📉 Trade Setup Review\n📊 Account Health Check\n🧠 Psychology Support\n🏆 Funded Account Advice\n⚠️ Margin Call Emergency\n\nStart your free 1-day trial inside the app.",
+    "🚨 Welcome to LiveTrade DM\nYour 24/7 hotline when the market turns against you.\nGet instant help from real trading experts — anytime you panic, hesitate, or face tough decisions.\nStay calm, stay in control.\n🎁 Claim your 3-day free trial now.",
     {
       reply_markup: {
         inline_keyboard: [

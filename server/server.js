@@ -155,13 +155,14 @@ app.get("/api/user/:id", async (req, res) => {
     // Calculate package expiry
     let packageExpiry = null;
     if (user.package === "Elite") {
-      // If no package_start date, set it to now for existing Elite users
+      // If no package_start date, use trial_start for existing Elite users
       if (!user.package_start) {
+        const packageStart = user.trial_start || new Date().toISOString();
         await supabase
           .from("users")
-          .update({ package_start: new Date().toISOString() })
+          .update({ package_start: packageStart })
           .eq("id", user.id);
-        user.package_start = new Date().toISOString();
+        user.package_start = packageStart;
       }
       
       const startDate = new Date(user.package_start);
@@ -353,6 +354,27 @@ app.post("/api/chat", async (req, res) => {
 
     if (plan === "Trial" && status === "expired") {
       return res.status(403).json({ error: "Trial expired" });
+    }
+
+    // Check Elite package expiry
+    if (plan === "Elite") {
+      if (!userRow.package_start) {
+        const packageStart = userRow.trial_start || new Date().toISOString();
+        await supabase
+          .from("users")
+          .update({ package_start: packageStart })
+          .eq("id", userId);
+        userRow.package_start = packageStart;
+      }
+      
+      const startDate = new Date(userRow.package_start);
+      const expiryDate = new Date(startDate.getTime() + (30 * 24 * 60 * 60 * 1000));
+      const now = new Date();
+      const daysLeft = Math.ceil((expiryDate.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+      
+      if (daysLeft <= 0) {
+        return res.status(403).json({ error: "Package expired" });
+      }
     }
 
     const { allowed } = await checkAndIncrement(userId);
