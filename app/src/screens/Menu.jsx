@@ -16,7 +16,7 @@ export default function Menu({ status, onSelectTopic }) {
   // Format package expiry countdown
   const formatExpiry = (packageExpiry) => {
     if (!packageExpiry) {
-      // For testing - show a countdown even if no packageExpiry data
+      // For Elite users without packageExpiry data, show default
       if (status.package === "Elite") {
         return { text: "30 days left", color: "#00d084", urgent: false };
       }
