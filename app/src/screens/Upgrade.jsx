@@ -94,6 +94,20 @@ export default function Upgrade({ userId, status, onActivated }) {
     }
   };
 
+  // inside Upgrade.jsx, after payment successfully approved
+  useEffect(() => {
+    if (message && message.includes("approved")) {
+      const poll = setInterval(async () => {
+        await onActivated();
+      }, 4500); // every 4.5 seconds
+
+      // Stop polling after 1 minute
+      setTimeout(() => clearInterval(poll), 60000);
+
+      return () => clearInterval(poll);
+    }
+  }, [message]);
+
   return (
     <div
       style={{
