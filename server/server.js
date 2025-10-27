@@ -562,7 +562,7 @@ app.get("/api/admin/users-with-conversations", async (req, res) => {
 
     if (error) throw error;
 
-    // mark expired vs active
+    // mark expired vs active and set package_start for existing Elite users
     const now = Date.now();
     const trialDuration = (+process.env.TRIAL_DURATION_HOURS || 72) * 36e5;
     const users = data.map(u => {
@@ -570,6 +570,22 @@ app.get("/api/admin/users-with-conversations", async (req, res) => {
       if (u.package === "trial" && now - new Date(u.trial_start).getTime() > trialDuration) {
         status = "expired";
       }
+      
+      // Set package_start for existing Elite users who don't have it
+      if (u.package === "Elite" && !u.package_start) {
+        // Set package_start to 15 days ago so countdown shows 15 days left
+        const fifteenDaysAgo = new Date(now - (15 * 24 * 60 * 60 * 1000)).toISOString();
+        u.package_start = fifteenDaysAgo;
+        
+        // Update in database (async, don't wait)
+        supabase
+          .from("users")
+          .update({ package_start: fifteenDaysAgo })
+          .eq("id", u.id)
+          .then(() => console.log(`Set package_start for user ${u.id}`))
+          .catch(e => console.warn(`Failed to set package_start for user ${u.id}:`, e));
+      }
+      
       return { ...u, status };
     });
 
