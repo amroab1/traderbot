@@ -557,7 +557,7 @@ app.get("/api/admin/users-with-conversations", async (req, res) => {
   try {
     const { data, error } = await supabase
       .from("users")
-      .select("id, package, trial_start, last_request_reset")
+      .select("id, package, trial_start, package_start, last_request_reset")
       .order("trial_start", { ascending: false });
 
     if (error) throw error;

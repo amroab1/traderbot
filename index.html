@@ -502,6 +502,25 @@
       .catch(() => toast("Copy failed", "error"));
   }
 
+  function formatPackageExpiry(user) {
+    if (user.package !== "Elite" || !user.package_start) return null;
+    
+    const startDate = new Date(user.package_start);
+    const expiryDate = new Date(startDate.getTime() + (30 * 24 * 60 * 60 * 1000)); // 30 days
+    const now = new Date();
+    const daysLeft = Math.ceil((expiryDate.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+    
+    if (daysLeft <= 0) {
+      return { text: "Expired", color: "#ef4444", urgent: true };
+    } else if (daysLeft <= 3) {
+      return { text: `${daysLeft} days left`, color: "#f59e0b", urgent: true };
+    } else if (daysLeft <= 7) {
+      return { text: `${daysLeft} days left`, color: "#f59e0b", urgent: false };
+    } else {
+      return { text: `${daysLeft} days left`, color: "#22c55e", urgent: false };
+    }
+  }
+
   function showSection(name) {
     currentSection = name;
     $$(".section").forEach(s => s.classList.remove("active"));
@@ -567,6 +586,8 @@
         const li = document.createElement("li");
         li.className = "item";
         const badgeClass = (u.status || "").toLowerCase() === "active" ? "badge active" : "badge expired";
+        const expiryInfo = formatPackageExpiry(u);
+        
         li.innerHTML = `
           <div class="meta">
             <div class="row">
@@ -575,6 +596,7 @@
             </div>
             <div class="row">
               <span class="${badgeClass}">${u.package ?? "—"} • ${u.status ?? "—"}</span>
+              ${expiryInfo ? `<span style="color: ${expiryInfo.color}; font-weight: 600; margin-left: 8px;">${expiryInfo.urgent ? "⚠️ " : ""}${expiryInfo.text}</span>` : ""}
             </div>
           </div>
           <div class="row">
@@ -667,6 +689,25 @@
     currentPlan = plan;
     $("#convUser").textContent = userId;
     $("#convPlan").textContent = plan || "—";
+    
+    // Add expiry info to conversation header
+    try {
+      const res = await safeFetch(`${API_BASE}/api/admin/users-with-conversations`);
+      const data = await res.json();
+      const user = data.find(u => u.id === userId);
+      if (user) {
+        const expiryInfo = formatPackageExpiry(user);
+        if (expiryInfo) {
+          const expiryEl = document.createElement("div");
+          expiryEl.style.cssText = `color: ${expiryInfo.color}; font-weight: 600; font-size: 12px; margin-top: 4px;`;
+          expiryEl.textContent = `${expiryInfo.urgent ? "⚠️ " : ""}${expiryInfo.text}`;
+          $("#convPlan").parentNode.appendChild(expiryEl);
+        }
+      }
+    } catch (e) {
+      console.warn("Failed to load user expiry info:", e);
+    }
+    
     toggleChatUI(true);
     await loadConversation();
     autoScroll();
