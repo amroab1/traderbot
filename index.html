@@ -503,7 +503,12 @@
   }
 
   function formatPackageExpiry(user) {
-    if (user.package !== "Elite" || !user.package_start) return null;
+    if (user.package !== "Elite") return null;
+    
+    // If no package_start date, show a default countdown for existing Elite users
+    if (!user.package_start) {
+      return { text: "30 days left", color: "#22c55e", urgent: false };
+    }
     
     const startDate = new Date(user.package_start);
     const expiryDate = new Date(startDate.getTime() + (30 * 24 * 60 * 60 * 1000)); // 30 days
