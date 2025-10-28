@@ -606,6 +606,7 @@
           </div>
           <div class="row">
             <button class="btn" data-open="${u.id}" data-plan="${u.package ?? ""}">Open Chat</button>
+            <button class="btn danger" data-delete="${u.id}">Delete User</button>
           </div>
         `;
         ul.append(li);
@@ -795,6 +796,25 @@
     } catch {}
   }
 
+  async function deleteUser(userId) {
+    if (!userId) return;
+    if (!confirm(`Delete user ${userId}? This cannot be undone.`)) return;
+    try {
+      await safeFetch(`${API_BASE}/api/admin/delete-user`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ userId })
+      });
+      toast("User deleted", "success");
+      // Refresh lists
+      await loadUsers();
+      await loadPending();
+      await loadCompleted();
+      // Exit chat if we deleted the currently open user
+      if (currentUser === userId) exitChat();
+    } catch {}
+  }
+
   // ====== EVENT BINDINGS ======
   $$("#nav button").forEach(btn => {
     btn.addEventListener("click", () => showSection(btn.dataset.section));
@@ -828,6 +848,10 @@
     if (t.matches("[data-approve]")) {
       const txid = t.getAttribute("data-approve");
       approve(txid);
+    }
+    if (t.matches("[data-delete]")) {
+      const userId = t.getAttribute("data-delete");
+      deleteUser(userId);
     }
   });
 

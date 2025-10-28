@@ -878,5 +878,63 @@ app.post("/api/admin/respond", async (req, res) => {
   }
 });
 
+// Admin: delete a user and related data
+app.post("/api/admin/delete-user", async (req, res) => {
+  const secret = req.headers["x-admin-secret"];
+  if (secret !== process.env.ADMIN_SECRET)
+    return res.status(403).json({ error: "Forbidden" });
+
+  const { userId } = req.body;
+  if (!userId) return res.status(400).json({ error: "userId required" });
+
+  try {
+    // Fetch conversations to delete messages
+    const { data: convs } = await supabase
+      .from("conversations")
+      .select("id")
+      .eq("user_id", userId);
+
+    const convIds = (convs || []).map(c => c.id);
+    if (convIds.length) {
+      await supabase
+        .from("messages")
+        .delete()
+        .in("conversation_id", convIds);
+    }
+
+    // Delete conversations
+    await supabase
+      .from("conversations")
+      .delete()
+      .eq("user_id", userId);
+
+    // Delete payments (pending/approved are in same table)
+    await supabase
+      .from("pending_payments")
+      .delete()
+      .eq("user_id", userId);
+
+    // Delete user
+    await supabase
+      .from("users")
+      .delete()
+      .eq("id", userId);
+
+    // Notify admin (optional)
+    if (ADMIN_TELEGRAM_ID) {
+      await sendTelegramMessage(
+        ADMIN_TELEGRAM_ID,
+        `🗑️ User deleted\nID: ${userId}`,
+        { parse_mode: "Markdown" }
+      );
+    }
+
+    res.json({ success: true });
+  } catch (e) {
+    console.error("POST /api/admin/delete-user error:", e);
+    res.status(500).json({ error: "Delete user failed" });
+  }
+});
+
 const PORT = process.env.PORT || 5000;
 app.listen(PORT, () => console.log("Server listening on", PORT));
