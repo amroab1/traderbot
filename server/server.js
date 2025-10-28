@@ -546,17 +546,31 @@ app.post("/api/admin/approve-payment", async (req, res) => {
 
     if (!pending) return res.status(404).json({ error: "Pending payment not found" });
 
-    // Normalize package casing to canonical values
-    const pkgLower = String(pending.package || '').toLowerCase();
-    const canonicalPkg = pkgLower === 'elite' ? 'Elite' : pkgLower === 'trial' ? 'trial' : pending.package;
+    // Normalize and trim package casing to canonical values
+    const rawPkg = String(pending.package || '').trim();
+    const pkgLower = rawPkg.toLowerCase();
+    const canonicalPkg = pkgLower === 'elite' ? 'Elite' : pkgLower === 'trial' ? 'trial' : rawPkg;
 
-    const { error: upsertError } = await supabase.from("users").upsert({
+    // Try upsert with package_start; if column missing, fall back without it
+    const upsertPayload = {
       id: pending.user_id,
       package: canonicalPkg,
       package_start: new Date().toISOString(),
       requests_week: 0,
       last_request_reset: new Date().toISOString(),
-    });
+    };
+    let { error: upsertError } = await supabase.from("users").upsert(upsertPayload);
+    if (upsertError && /package_start/i.test(String(upsertError?.message || ""))) {
+      const fallbackPayload = {
+        id: pending.user_id,
+        package: canonicalPkg,
+        requests_week: 0,
+        last_request_reset: new Date().toISOString(),
+      };
+      const { error: fallbackErr } = await supabase.from("users").upsert(fallbackPayload);
+      if (fallbackErr) throw fallbackErr;
+      upsertError = null;
+    }
     if (upsertError) throw upsertError;
 
     await supabase
@@ -576,7 +590,7 @@ app.post("/api/admin/approve-payment", async (req, res) => {
     res.json({ success: true, activated: canonicalPkg });
   } catch (e) {
     console.error("POST /api/admin/approve-payment error:", e);
-    res.status(500).json({ error: "Approval failed" });
+    res.status(500).json({ error: "Approval failed", details: String(e?.message || e) });
   }
 });
 
