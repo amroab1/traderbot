@@ -244,22 +244,27 @@ app.post("/api/submit-payment", async (req, res) => {
     // Notify admin of new pending payment
     if (ADMIN_TELEGRAM_ID) {
       const createdAt = data?.created_at || new Date().toISOString();
+
+      // Prefer a simple URL button over web_app to avoid BotFather web app requirements
+      const adminPanelUrl = process.env.PUBLIC_BASE_URL;
+      const options = {};
+      if (adminPanelUrl) {
+        options.reply_markup = {
+          inline_keyboard: [
+            [
+              {
+                text: "🛠️ Open Admin Panel",
+                url: adminPanelUrl,
+              },
+            ],
+          ],
+        };
+      }
+
       await sendTelegramMessage(
         ADMIN_TELEGRAM_ID,
         `💳 New pending payment\nUser: ${userId}\nPackage: ${pkg}\nTXID: ${txid.trim()}\nTime: ${createdAt}`,
-        {
-          parse_mode: "Markdown",
-          reply_markup: JSON.stringify({
-            inline_keyboard: [
-              [
-                {
-                  text: "🛠️ Open Admin Panel",
-                  web_app: { url: process.env.PUBLIC_BASE_URL }
-                }
-              ]
-            ]
-          })
-        }
+        options
       );
     }
 

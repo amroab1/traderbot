@@ -839,13 +839,28 @@
     if (!userId) return;
     if (!confirm(`Delete user ${userId}? This cannot be undone.`)) return;
     try {
-      await safeFetch(`${API_BASE}/api/admin/delete-user`, {
+      const res = await safeFetch(`${API_BASE}/api/admin/delete-user`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ userId })
       });
-      toast("User deleted", "success");
+      let ok = true;
+      try {
+        const body = await res.json();
+        ok = !!body?.success;
+      } catch {}
+      toast(ok ? "User deleted" : "Delete request sent", ok ? "success" : "info");
+
+      // Optimistically remove the user row to avoid stale display
+      const delBtn = document.querySelector(`[data-delete="${userId}"]`);
+      if (delBtn) {
+        const item = delBtn.closest('.item');
+        if (item) item.remove();
+      }
+
       // Refresh lists
+      // Small delay to allow backend to finish cascading deletes
+      await new Promise(r => setTimeout(r, 250));
       await loadUsers();
       await loadPending();
       await loadCompleted();
