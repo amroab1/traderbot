@@ -7,7 +7,7 @@ import Upgrade from "./screens/Upgrade.jsx";
 
 const LIMITS = {
   trial: 15,
-  Elite: Infinity,
+  elite: Infinity,
 };
 
 export default function App() {
