@@ -108,14 +108,12 @@ async function checkAndIncrement(userId) {
       .eq("id", userId);
     user.requests_week = 0;
   }
+  const pkgLower = String(user.package || '').toLowerCase();
   let limit = 0;
-  switch (user.package) {
-    case "Elite":
-      limit = Infinity;
-      break;
-    case "trial":
-      limit = 15;
-      break;
+  if (pkgLower === 'elite') {
+    limit = Infinity;
+  } else if (pkgLower === 'trial') {
+    limit = 15;
   }
   if (user.requests_week >= limit) return { allowed: false, limit };
   await supabase
@@ -138,7 +136,8 @@ app.get("/api/user/:id", async (req, res) => {
     
     // Calculate package expiry
     let packageExpiry = null;
-    if (user.package === "Elite") {
+    const pkgLower = String(user.package || '').toLowerCase();
+    if (pkgLower === "elite") {
       // Ensure package_start exists; default to now for missing legacy records
       if (!user.package_start) {
         const packageStart = new Date().toISOString();
@@ -197,9 +196,14 @@ app.post("/api/activate", async (req, res) => {
   const { userId, package: pkg } = req.body;
   if (!userId || !pkg)
     return res.status(400).json({ error: "Missing userId or package" });
+
+  // Normalize package casing; store canonical "Elite" for unlimited plan
+  const pkgLower = String(pkg || '').toLowerCase();
+  const canonicalPkg = pkgLower === 'elite' ? 'Elite' : pkgLower === 'trial' ? 'trial' : pkg;
+
   await supabase.from("users").upsert({
     id: userId,
-    package: pkg,
+    package: canonicalPkg,
     package_start: new Date().toISOString(),
     requests_week: 0,
     last_request_reset: new Date().toISOString(),
@@ -352,12 +356,13 @@ app.post("/api/chat", async (req, res) => {
     if (!userRow) return res.status(404).json({ error: "User not found" });
     const { plan, status } = getPlanStatus(userRow);
 
-    if (plan === "Trial" && status === "expired") {
+    const planLower = String(plan || '').toLowerCase();
+    if (planLower === "trial" && status === "expired") {
       return res.status(403).json({ error: "Trial expired" });
     }
 
     // Check Elite package expiry
-    if (plan === "Elite") {
+    if (planLower === "elite") {
       if (!userRow.package_start) {
         // Align with /api/user behavior: when Elite has no package_start,
         // initialize it to now (not trial_start) to avoid false immediate expiry.
