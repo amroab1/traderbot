@@ -530,18 +530,16 @@
 
     // For active users, avoid showing misleading "Expired" — only show countdown if positive
     if (status === "active") {
-      if (!user.package_start) {
-        // Legacy active Elite without start date — show a friendly default
-        return { text: "30 days left", color: "#22c55e", urgent: false };
+      const baseStartRaw = user.package_start || user.last_request_reset || user.trial_start || null;
+      let daysLeft = 30;
+      if (baseStartRaw) {
+        const startDate = new Date(baseStartRaw);
+        const expiryDate = new Date(startDate.getTime() + (30 * 24 * 60 * 60 * 1000));
+        const now = new Date();
+        daysLeft = Math.ceil((expiryDate.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+        if (isNaN(daysLeft)) daysLeft = 30;
       }
-      const startDate = new Date(user.package_start);
-      const expiryDate = new Date(startDate.getTime() + (30 * 24 * 60 * 60 * 1000));
-      const now = new Date();
-      const daysLeft = Math.ceil((expiryDate.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
-      if (daysLeft <= 0) {
-        // Hide expired label when status says active — likely renewed users awaiting DB sync
-        return null;
-      }
+      if (daysLeft <= 0) daysLeft = 30; // fallback for renewed users
       if (daysLeft <= 3) return { text: `${daysLeft} days left`, color: "#f59e0b", urgent: true };
       if (daysLeft <= 7) return { text: `${daysLeft} days left`, color: "#f59e0b", urgent: false };
       return { text: `${daysLeft} days left`, color: "#22c55e", urgent: false };
