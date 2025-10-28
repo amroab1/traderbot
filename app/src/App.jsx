@@ -1,5 +1,5 @@
 // app/src/App.jsx
-import React, { useEffect, useState } from "react";
+import React, { useEffect, useRef, useState } from "react";
 import { getUser, startTrial } from "./api.js";
 import Menu from "./screens/Menu.jsx";
 import Chat from "./screens/Chat.jsx";
@@ -20,6 +20,7 @@ export default function App() {
 
   useEffect(() => {
     let resolved = false;
+    const autoCreateTried = { current: false };
 
     const proceed = async (uid) => {
       setUserId(uid);
@@ -28,7 +29,20 @@ export default function App() {
         setStatus(res.data);
       } catch (e) {
         console.error("Failed to fetch user status:", e);
-        setError("Failed to fetch user status.");
+        // If user is missing (404), auto-start trial and then fetch status
+        if (e?.response?.status === 404 && !autoCreateTried.current) {
+          try {
+            autoCreateTried.current = true;
+            await startTrial(uid);
+            const res2 = await getUser(uid);
+            setStatus(res2.data);
+          } catch (e2) {
+            console.error("Auto-start trial failed:", e2);
+            setError("Failed to fetch user status.");
+          }
+        } else {
+          setError("Failed to fetch user status.");
+        }
       }
     };
 
@@ -89,6 +103,15 @@ export default function App() {
       setStatus(res.data);
     } catch (e) {
       console.error("Refresh status failed", e);
+      if (e?.response?.status === 404) {
+        try {
+          await startTrial(userId);
+          const res2 = await getUser(userId);
+          setStatus(res2.data);
+        } catch (e2) {
+          console.error("Auto-start trial on refresh failed:", e2);
+        }
+      }
     }
   };
 
