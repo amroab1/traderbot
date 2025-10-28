@@ -408,19 +408,21 @@ app.post("/api/chat", async (req, res) => {
     // Check Elite package expiry
     if (plan === "Elite") {
       if (!userRow.package_start) {
-        const packageStart = userRow.trial_start || new Date().toISOString();
+        // Align with /api/user behavior: when Elite has no package_start,
+        // initialize it to now (not trial_start) to avoid false immediate expiry.
+        const packageStart = new Date().toISOString();
         await supabase
           .from("users")
           .update({ package_start: packageStart })
           .eq("id", userId);
         userRow.package_start = packageStart;
       }
-      
+
       const startDate = new Date(userRow.package_start);
       const expiryDate = new Date(startDate.getTime() + (30 * 24 * 60 * 60 * 1000));
       const now = new Date();
       const daysLeft = Math.ceil((expiryDate.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
-      
+
       if (daysLeft <= 0) {
         return res.status(403).json({ error: "Package expired" });
       }
