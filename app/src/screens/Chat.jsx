@@ -96,12 +96,13 @@ export default function Chat({
   useEffect(() => {
     if (!status) return;
     const limits = {
-      trial: parseInt(import.meta.env.VITE_STARTER_WEEKLY_LIMIT || "5", 10),
-      Starter: parseInt(import.meta.env.VITE_STARTER_WEEKLY_LIMIT || "5", 10),
-      Pro: parseInt(import.meta.env.VITE_PRO_WEEKLY_LIMIT || "10", 10),
-      Elite: Infinity,
+      trial: 15,
+      starter: parseInt(import.meta.env.VITE_STARTER_WEEKLY_LIMIT || "5", 10),
+      pro: parseInt(import.meta.env.VITE_PRO_WEEKLY_LIMIT || "10", 10),
+      elite: Infinity,
     };
-    const limit = limits[status.package] ?? 0;
+    const pkg = (status.package || "").toLowerCase();
+    const limit = limits[pkg] ?? 0;
     setUsageInfo({ used: status.requestsWeek, limit });
     if (limit !== Infinity && status.requestsWeek >= limit && onLimitExceeded) {
       onLimitExceeded();

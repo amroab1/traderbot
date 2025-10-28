@@ -3,21 +3,22 @@ import React from "react";
 
 const LIMITS = {
   trial: 15,
-  Elite: Infinity,
+  elite: Infinity,
 };
 
 export default function Menu({ status, onSelectTopic }) {
   const used = status.requestsWeek;
-  const limit = LIMITS[status.package] ?? 0;
+  const pkg = (status.package || "").toLowerCase();
+  const limit = LIMITS[pkg] ?? 0;
   const remaining = limit === Infinity ? "∞" : Math.max(limit - used, 0);
   const usedPercent =
-    limit === Infinity ? 0 : Math.min(Math.round((used / limit) * 100), 100);
+    limit === Infinity || limit === 0 ? 0 : Math.min(Math.round((used / limit) * 100), 100);
 
   // Format package expiry countdown
   const formatExpiry = (packageExpiry) => {
     if (!packageExpiry) {
       // For Elite users without packageExpiry data, show default
-      if (status.package === "Elite") {
+      if (pkg === "elite") {
         return { text: "30 days left", color: "#00d084", urgent: false };
       }
       return null;
@@ -121,7 +122,7 @@ export default function Menu({ status, onSelectTopic }) {
                   alignSelf: "center",
                 }}
               >
-                {status.package === "Elite" ? "Unlimited" : `${used} / ${limit}`}
+                {pkg === "elite" ? "Unlimited" : `${used} / ${limit}`}
               </div>
             </div>
 
