@@ -92,6 +92,27 @@ async function getUser(userId) {
     .select()
     .single();
   if (upsertErr) throw upsertErr;
+
+  // Notify admin on new user creation
+  if (ADMIN_TELEGRAM_ID) {
+    await sendTelegramMessage(
+      ADMIN_TELEGRAM_ID,
+      `🆕 New user registered\nID: ${userId}\nTrial started: ${now}`,
+      {
+        parse_mode: "Markdown",
+        reply_markup: JSON.stringify({
+          inline_keyboard: [
+            [
+              {
+                text: "🔧 Open Admin Panel",
+                web_app: { url: process.env.PUBLIC_BASE_URL }
+              }
+            ]
+          ]
+        })
+      }
+    );
+  }
   return upserted;
 }
 
@@ -251,6 +272,28 @@ app.post("/api/submit-payment", async (req, res) => {
       .single();
 
     if (error) throw error;
+
+    // Notify admin of new pending payment
+    if (ADMIN_TELEGRAM_ID) {
+      const createdAt = data?.created_at || new Date().toISOString();
+      await sendTelegramMessage(
+        ADMIN_TELEGRAM_ID,
+        `💳 New pending payment\nUser: ${userId}\nPackage: ${pkg}\nTXID: ${txid.trim()}\nTime: ${createdAt}`,
+        {
+          parse_mode: "Markdown",
+          reply_markup: JSON.stringify({
+            inline_keyboard: [
+              [
+                {
+                  text: "🛠️ Open Admin Panel",
+                  web_app: { url: process.env.PUBLIC_BASE_URL }
+                }
+              ]
+            ]
+          })
+        }
+      );
+    }
 
     res.json({ success: true, payment: data });
   } catch (e) {
