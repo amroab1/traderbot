@@ -66,7 +66,7 @@ const uploadDir = path.join(__dirname, "uploads");
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir);
 const upload = multer({ dest: uploadDir });
 
-// Helper: get or create user
+// Helper: get user (no auto-create)
 async function getUser(userId) {
   const { data, error, status } = await supabase
     .from("users")
@@ -74,46 +74,7 @@ async function getUser(userId) {
     .eq("id", userId)
     .single();
   if (error && status !== 406) console.warn("getUser select:", error);
-  if (data) return data;
-
-  const now = new Date().toISOString();
-  const { data: upserted, error: upsertErr } = await supabase
-    .from("users")
-    .upsert(
-      {
-        id: userId,
-        trial_start: now,
-        package: "trial",
-        requests_week: 0,
-        last_request_reset: now,
-      },
-      { onConflict: "id" }
-    )
-    .select()
-    .single();
-  if (upsertErr) throw upsertErr;
-
-  // Notify admin on new user creation
-  if (ADMIN_TELEGRAM_ID) {
-    await sendTelegramMessage(
-      ADMIN_TELEGRAM_ID,
-      `🆕 New user registered\nID: ${userId}\nTrial started: ${now}`,
-      {
-        parse_mode: "Markdown",
-        reply_markup: JSON.stringify({
-          inline_keyboard: [
-            [
-              {
-                text: "🔧 Open Admin Panel",
-                web_app: { url: process.env.PUBLIC_BASE_URL }
-              }
-            ]
-          ]
-        })
-      }
-    );
-  }
-  return upserted;
+  return data || null;
 }
 
 // Helper: calculate trial status
@@ -137,6 +98,7 @@ function getPlanStatus(user) {
 // Helper: enforce weekly rate limit
 async function checkAndIncrement(userId) {
   const user = await getUser(userId);
+  if (!user) return { allowed: false, limit: 0, notFound: true };
   const now = Date.now();
   const lastReset = new Date(user.last_request_reset).getTime();
   if (now - lastReset > 7 * 24 * 60 * 60 * 1000) {
@@ -171,6 +133,7 @@ app.get("/health", (_, res) =>
 app.get("/api/user/:id", async (req, res) => {
   try {
     const user = await getUser(req.params.id);
+    if (!user) return res.status(404).json({ error: "User not found" });
     const { plan, status } = getPlanStatus(user);
     
     // Calculate package expiry
@@ -399,6 +362,7 @@ app.post("/api/chat", async (req, res) => {
 
   try {
     const userRow = await getUser(userId);
+    if (!userRow) return res.status(404).json({ error: "User not found" });
     const { plan, status } = getPlanStatus(userRow);
 
     if (plan === "Trial" && status === "expired") {
