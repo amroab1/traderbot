@@ -84,10 +84,11 @@ export default function App() {
 
   useEffect(() => {
     if (!status) return;
-    const limit = LIMITS[status.package] ?? 0;
+    const pkg = (status.package || "").toLowerCase();
+    const limit = LIMITS[pkg] ?? 0;
     if (
-      (status.package === "trial" && status.expired) ||
-      (status.package === "Elite" && status.packageExpiry && status.packageExpiry.isExpired) ||
+      (pkg === "trial" && status.expired) ||
+      (pkg === "elite" && status.packageExpiry && status.packageExpiry.isExpired) ||
       (limit !== Infinity && status.requestsWeek >= limit)
     ) {
       setShowUpgrade(true);
@@ -150,7 +151,8 @@ export default function App() {
   }
 
   // If trial not active, show start trial CTA
-  if (status.package === "trial" && !status.trialActive) {
+  const pkg = (status.package || "").toLowerCase();
+  if (pkg === "trial" && !status.trialActive) {
     return (
       <div style={{ padding: 20, textAlign: "center", maxWidth: 600, margin: "0 auto" }}>
         <h1 style={{ fontSize: 28, marginBottom: 20, lineHeight: 1.3 }}>
