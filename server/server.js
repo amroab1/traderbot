@@ -546,13 +546,18 @@ app.post("/api/admin/approve-payment", async (req, res) => {
 
     if (!pending) return res.status(404).json({ error: "Pending payment not found" });
 
-    await supabase.from("users").upsert({
+    // Normalize package casing to canonical values
+    const pkgLower = String(pending.package || '').toLowerCase();
+    const canonicalPkg = pkgLower === 'elite' ? 'Elite' : pkgLower === 'trial' ? 'trial' : pending.package;
+
+    const { error: upsertError } = await supabase.from("users").upsert({
       id: pending.user_id,
-      package: pending.package,
+      package: canonicalPkg,
       package_start: new Date().toISOString(),
       requests_week: 0,
       last_request_reset: new Date().toISOString(),
     });
+    if (upsertError) throw upsertError;
 
     await supabase
       .from("pending_payments")
@@ -565,11 +570,10 @@ app.post("/api/admin/approve-payment", async (req, res) => {
 
     await sendTelegramMessage(
       pending.user_id,
-      `🎉 Your *${pending.package}* plan is now active!`,
+      `🎉 Your *${canonicalPkg}* plan is now active!`,
       { parse_mode: "Markdown" }
     );
-
-    res.json({ success: true, activated: pending.package });
+    res.json({ success: true, activated: canonicalPkg });
   } catch (e) {
     console.error("POST /api/admin/approve-payment error:", e);
     res.status(500).json({ error: "Approval failed" });
