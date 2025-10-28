@@ -885,6 +885,33 @@ app.post("/api/admin/delete-user", async (req, res) => {
       .delete()
       .eq("user_id", userId);
 
+    // Delete images and storage files
+    try {
+      const { data: imgs } = await supabase
+        .from("images")
+        .select("file_path")
+        .eq("user_id", userId);
+      const paths = (imgs || [])
+        .map(i => {
+          const url = i.file_path || "";
+          const marker = "/object/public/chat-uploads/";
+          const idx = url.indexOf(marker);
+          return idx >= 0 ? url.substring(idx + marker.length) : null;
+        })
+        .filter(Boolean);
+      if (paths.length) {
+        await supabase.storage
+          .from("chat-uploads")
+          .remove(paths);
+      }
+      await supabase
+        .from("images")
+        .delete()
+        .eq("user_id", userId);
+    } catch (e) {
+      console.warn("Image cleanup failed for user", userId, e.message);
+    }
+
     // Delete user
     await supabase
       .from("users")
