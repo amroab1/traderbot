@@ -526,26 +526,39 @@
 
   function formatPackageExpiry(user) {
     if (user.package !== "Elite") return null;
-    
-    // If no package_start date, show a default countdown for existing Elite users
-    if (!user.package_start) {
-      return { text: "30 days left", color: "#22c55e", urgent: false };
-    }
-    
-    const startDate = new Date(user.package_start);
-    const expiryDate = new Date(startDate.getTime() + (30 * 24 * 60 * 60 * 1000)); // 30 days
-    const now = new Date();
-    const daysLeft = Math.ceil((expiryDate.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
-    
-    if (daysLeft <= 0) {
-      return { text: "Expired", color: "#ef4444", urgent: true };
-    } else if (daysLeft <= 3) {
-      return { text: `${daysLeft} days left`, color: "#f59e0b", urgent: true };
-    } else if (daysLeft <= 7) {
-      return { text: `${daysLeft} days left`, color: "#f59e0b", urgent: false };
-    } else {
+    const status = (user.status || "").toLowerCase();
+
+    // For active users, avoid showing misleading "Expired" — only show countdown if positive
+    if (status === "active") {
+      if (!user.package_start) {
+        // Legacy active Elite without start date — show a friendly default
+        return { text: "30 days left", color: "#22c55e", urgent: false };
+      }
+      const startDate = new Date(user.package_start);
+      const expiryDate = new Date(startDate.getTime() + (30 * 24 * 60 * 60 * 1000));
+      const now = new Date();
+      const daysLeft = Math.ceil((expiryDate.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+      if (daysLeft <= 0) {
+        // Hide expired label when status says active — likely renewed users awaiting DB sync
+        return null;
+      }
+      if (daysLeft <= 3) return { text: `${daysLeft} days left`, color: "#f59e0b", urgent: true };
+      if (daysLeft <= 7) return { text: `${daysLeft} days left`, color: "#f59e0b", urgent: false };
       return { text: `${daysLeft} days left`, color: "#22c55e", urgent: false };
     }
+
+    // Non-active users — show accurate expiry
+    if (!user.package_start) {
+      return { text: "Expired", color: "#ef4444", urgent: true };
+    }
+    const startDate = new Date(user.package_start);
+    const expiryDate = new Date(startDate.getTime() + (30 * 24 * 60 * 60 * 1000));
+    const now = new Date();
+    const daysLeft = Math.ceil((expiryDate.getTime() - now.getTime()) / (24 * 60 * 60 * 1000));
+    if (daysLeft <= 0) return { text: "Expired", color: "#ef4444", urgent: true };
+    if (daysLeft <= 3) return { text: `${daysLeft} days left`, color: "#f59e0b", urgent: true };
+    if (daysLeft <= 7) return { text: `${daysLeft} days left`, color: "#f59e0b", urgent: false };
+    return { text: `${daysLeft} days left`, color: "#22c55e", urgent: false };
   }
 
   function showSection(name) {
