@@ -155,9 +155,9 @@ app.get("/api/user/:id", async (req, res) => {
     // Calculate package expiry
     let packageExpiry = null;
     if (user.package === "Elite") {
-      // If no package_start date, use trial_start for existing Elite users
+      // Ensure package_start exists; default to now for missing legacy records
       if (!user.package_start) {
-        const packageStart = user.trial_start || new Date().toISOString();
+        const packageStart = new Date().toISOString();
         await supabase
           .from("users")
           .update({ package_start: packageStart })
@@ -211,6 +211,7 @@ app.post("/api/activate", async (req, res) => {
   await supabase.from("users").upsert({
     id: userId,
     package: pkg,
+    package_start: new Date().toISOString(),
     requests_week: 0,
     last_request_reset: new Date().toISOString(),
   });
