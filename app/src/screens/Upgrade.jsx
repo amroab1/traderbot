@@ -94,7 +94,42 @@ export default function Upgrade({ userId, status, onActivated }) {
     }
   };
 
-  // inside Upgrade.jsx, after payment successfully approved
+  // Poll pending-payment while awaiting verification; switch to approved when ready
+  useEffect(() => {
+    if (!userId) return;
+    const awaiting = message && message.toLowerCase().includes("awaiting verification");
+    if (!awaiting) return;
+
+    let active = true;
+    const interval = setInterval(async () => {
+      try {
+        const res = await fetch(
+          `${API_BASE}/api/pending-payment?userId=${encodeURIComponent(userId)}`
+        );
+        if (!res.ok) return;
+        const p = await res.json();
+        if (p && p.status === "approved") {
+          if (!active) return;
+          setSelectedPlan(p.package);
+          setMessage(`✅ Payment approved. You have access to the ${p.package} plan.`);
+          localStorage.removeItem("pendingTxid");
+          if (typeof onActivated === "function") {
+            onActivated();
+          }
+          clearInterval(interval);
+        }
+      } catch (e) {
+        // ignore transient errors
+      }
+    }, 5000);
+
+    return () => {
+      active = false;
+      clearInterval(interval);
+    };
+  }, [userId, message]);
+
+  // After approved, poll status refresh to exit upgrade screen
   useEffect(() => {
     if (message && message.includes("approved")) {
       const poll = setInterval(async () => {
