@@ -41,6 +41,15 @@ export default function Upgrade({ userId, status, onActivated }) {
               setMessage("Payment previously submitted, awaiting verification.");
             } else if (p.status === "approved") {
               setMessage(`✅ Payment approved. You have access to the ${p.package} plan.`);
+              try {
+                await activatePackage(userId, p.package);
+              } catch (e) {
+                // ignore activation errors; server might have already activated
+              }
+              localStorage.removeItem("pendingTxid");
+              if (typeof onActivated === "function") {
+                onActivated();
+              }
             }
           }
         }
@@ -112,6 +121,11 @@ export default function Upgrade({ userId, status, onActivated }) {
           if (!active) return;
           setSelectedPlan(p.package);
           setMessage(`✅ Payment approved. You have access to the ${p.package} plan.`);
+          try {
+            await activatePackage(userId, p.package);
+          } catch (e) {
+            // ignore activation errors; server might have already activated
+          }
           localStorage.removeItem("pendingTxid");
           if (typeof onActivated === "function") {
             onActivated();
