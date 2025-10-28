@@ -34,7 +34,7 @@ export default function Chat({
     if (userId && topic) {
       const stored = localStorage.getItem(STORAGE_KEY(userId, topic));
       if (stored) {
-        try {
+  try {
           setHistory(JSON.parse(stored));
         } catch {}
       }
@@ -160,7 +160,24 @@ export default function Chat({
       if (res.data?.error) throw new Error(res.data.error);
     } catch (err) {
       console.error("Send failed:", err);
-      setError(err.message || "Failed to send. Try again.");
+      // Friendly handling for 403 and quota/expiry
+      const statusCode = err?.response?.status;
+      const serverMsg = err?.response?.data?.error || "";
+      const msgLower = serverMsg.toLowerCase();
+
+      if (statusCode === 403 || (err?.message || "").includes("status code 403")) {
+        if (msgLower.includes("expired")) {
+          setError("Access expired. Please upgrade to continue.");
+          if (typeof onLimitExceeded === "function") onLimitExceeded();
+        } else if (msgLower.includes("limit") || msgLower.includes("quota")) {
+          setError("Weekly limit reached. Upgrade for unlimited access.");
+          if (typeof onLimitExceeded === "function") onLimitExceeded();
+        } else {
+          setError(serverMsg || "Access restricted (403). Please upgrade or contact support.");
+        }
+      } else {
+        setError(serverMsg || err.message || "Failed to send. Try again.");
+      }
     } finally {
       setSending(false);
       setImage(null);
