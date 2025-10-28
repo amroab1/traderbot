@@ -412,6 +412,8 @@
       <button class="btn secondary" id="backBtn">Back</button>
       <strong>User:</strong> <span class="id mono" id="convUser"></span>
       <button class="copy" id="copyUser">Copy</button>
+      <span style="margin-left:12px;"><strong>Name:</strong> <span id="convName" class="mono" style="opacity:.9">—</span></span>
+      <button class="btn secondary" id="editNameBtn" title="Set custom name">Edit Name</button>
     </div>
     <div class="row">
       <strong>Plan:</strong> <span id="convPlan"></span>
@@ -467,6 +469,24 @@
     if (type === "success") el.style.borderColor = "#2f6";
     $("#toast").append(el);
     setTimeout(() => el.remove(), 3000);
+  }
+
+  // --- Custom user names (local storage) ---
+  function getUserNames() {
+    try { return JSON.parse(localStorage.getItem("USER_NAMES") || "{}"); } catch { return {}; }
+  }
+  function getUserName(id) {
+    const map = getUserNames();
+    return map[id] || "";
+  }
+  function setUserName(id, name) {
+    const map = getUserNames();
+    if (name && name.trim()) {
+      map[id] = name.trim();
+    } else {
+      delete map[id];
+    }
+    localStorage.setItem("USER_NAMES", JSON.stringify(map));
   }
 
   function setServerHost() {
@@ -595,11 +615,13 @@
         li.className = "item";
         const badgeClass = (u.status || "").toLowerCase() === "active" ? "badge active" : "badge expired";
         const expiryInfo = formatPackageExpiry(u);
+        const customName = getUserName(u.id);
         
         li.innerHTML = `
           <div class="meta">
             <div class="row">
               <span class="mono">${u.id}</span>
+              ${customName ? `<span style="opacity:.85;margin-left:6px;">• ${customName}</span>` : ""}
               <button class="copy" data-copy="${u.id}">Copy</button>
             </div>
             <div class="row">
@@ -609,6 +631,7 @@
           </div>
           <div class="row">
             <button class="btn" data-open="${u.id}" data-plan="${u.package ?? ""}">Open Chat</button>
+            <button class="btn secondary" data-setname="${u.id}">Set Name</button>
             <button class="btn danger" data-delete="${u.id}">Delete User</button>
           </div>
         `;
@@ -698,6 +721,8 @@
     currentPlan = plan;
     $("#convUser").textContent = userId;
     $("#convPlan").textContent = plan || "—";
+    const name = getUserName(userId);
+    $("#convName").textContent = name || "—";
     
     // Add expiry info to conversation header
     try {
@@ -839,6 +864,19 @@
   // Back button
   $("#backBtn").addEventListener("click", exitChat);
 
+  // Edit custom name for current user
+  $("#editNameBtn").addEventListener("click", () => {
+    if (!currentUser) return toast("Open a chat first");
+    const existing = getUserName(currentUser);
+    const val = prompt("Enter custom name (leave empty to clear):", existing || "");
+    if (val !== null) {
+      setUserName(currentUser, val);
+      $("#convName").textContent = (val && val.trim()) ? val.trim() : "—";
+      // Refresh list to reflect updated name
+      if (currentSection === "conversations") loadUsers();
+    }
+  });
+
   // Lists: delegate clicks (copy/open/approve)
   document.addEventListener("click", (e) => {
     const t = e.target;
@@ -847,6 +885,17 @@
       const userId = t.getAttribute("data-open");
       const plan = t.getAttribute("data-plan") || "";
       openChat(userId, plan);
+    }
+    if (t.matches("[data-setname]")) {
+      const userId = t.getAttribute("data-setname");
+      const existing = getUserName(userId);
+      const val = prompt("Enter custom name (leave empty to clear):", existing || "");
+      if (val !== null) {
+        setUserName(userId, val);
+        // Refresh list and header (if same user)
+        loadUsers();
+        if (currentUser === userId) $("#convName").textContent = (val && val.trim()) ? val.trim() : "—";
+      }
     }
     if (t.matches("[data-approve]")) {
       const txid = t.getAttribute("data-approve");
