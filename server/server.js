@@ -197,11 +197,16 @@ app.get("/api/user/:id", async (req, res) => {
       };
     }
     
+    // Align expired flag with Elite expiry as well, so UI correctly gates access
+    const eliteExpired = !!(packageExpiry && packageExpiry.isExpired);
+    const effectiveExpired = (status === "expired") || eliteExpired;
+    const effectivePlanStatus = eliteExpired ? "expired" : status;
+
     res.json({
       trialActive: status === "active" && plan === "Trial",
-      expired: status === "expired",
+      expired: effectiveExpired,
       package: plan,
-      planStatus: status,
+      planStatus: effectivePlanStatus,
       requestsWeek: user.requests_week,
       packageExpiry: packageExpiry,
     });

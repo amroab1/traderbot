@@ -359,6 +359,7 @@
     </label>
     <span class="muted">Auto Refresh</span>
     <button class="btn secondary" id="refreshBtn" title="Refresh current section">Refresh</button>
+    <button class="btn secondary" id="setKeyBtn" title="Set admin secret">Set Admin Key</button>
   </div>
 </header>
 
@@ -441,9 +442,10 @@
 <div id="toast"></div>
 
 <script>
-  // ====== CONFIG (unchanged as requested) ======
+  // ====== CONFIG ======
   const API_BASE = "https://server-production-dd28.up.railway.app";
-  const ADMIN_SECRET = "123456"; // keep as-is
+  // Default admin secret; can be overridden via localStorage for remote servers
+  const ADMIN_SECRET = "123456"; // default; UI allows override
 
   // ====== STATE ======
   let currentSection = "conversations";
@@ -553,7 +555,8 @@
   }
 
   async function safeFetch(url, options={}) {
-    const defaultHeaders = { "x-admin-secret": ADMIN_SECRET };
+    const dynamicSecret = (typeof localStorage !== "undefined" && localStorage.getItem("ADMIN_SECRET")) || ADMIN_SECRET;
+    const defaultHeaders = { "x-admin-secret": dynamicSecret };
     options.headers = Object.assign({}, defaultHeaders, options.headers || {});
     let res;
     try {
@@ -864,6 +867,24 @@
       loadConversation().then(autoScroll);
     });
   });
+
+  // Allow setting admin secret from UI for remote servers
+  const setKeyBtn = document.getElementById("setKeyBtn");
+  if (setKeyBtn) {
+    setKeyBtn.addEventListener("click", () => {
+      const current = (typeof localStorage !== "undefined" && localStorage.getItem("ADMIN_SECRET")) || "";
+      const val = prompt("Enter admin secret (x-admin-secret):", current);
+      if (val && typeof localStorage !== "undefined") {
+        localStorage.setItem("ADMIN_SECRET", val);
+        toast("Admin key saved. Reloading lists…", "success");
+        // Refresh current section
+        if (currentSection === "conversations") loadUsers();
+        if (currentSection === "pending") loadPending();
+        if (currentSection === "completed") loadCompleted();
+        if (currentUser) loadConversation();
+      }
+    });
+  }
 
   // Chat controls
   $("#draftBtn").addEventListener("click", generateAIDraft);
